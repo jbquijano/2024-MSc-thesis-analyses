@@ -1,0 +1,177 @@
+---
+title: "Figure 1"
+format: html
+theme: 
+  light: zephyr
+  dark: cyborg
+toc: true
+page-layout: full
+number-sections: true
+number-depth: 3
+editor: visual
+self-contained: true
+---
+
+# Loading libraries
+
+```{r}
+pacman::p_load(tidyverse,
+               broom,
+               ggbeeswarm)
+```
+
+# Survival (daily mortality)
+
+## Import data
+
+Import mortality data in long format in 3 species of *Acropora*.
+
+```{r}
+survival_data_long_list <- 
+  list.files(recursive = T,
+             pattern = '*.csv',
+             full.names = T)
+
+survival_data_long <- 
+  read_csv(survival_data_long_list,
+           id = 'file_name') |> 
+  select(!1)
+```
+
+Export.
+
+```{r}
+write_csv(survival_data_long,
+          file = 'daily-survival-data.csv')
+```
+
+## Clean data
+
+Among the *Acropora* species, only *A. tenuis* showed mortality in the control tanks during exposure. These will not be included in further analyses, cutting the *A. tenuis* colonies that will be included to 25.
+
+These colonies are: ATEN07, ATEN08, ATEN09, ATEN24, ATEN25.
+
+```{r}
+unresolved_colonies <- c("ATEN07","ATEN08","ATEN09","ATEN24","ATEN25")
+
+survival_data_long <- 
+  survival_data_long |> 
+  filter(!Colony %in% unresolved_colonies)
+```
+
+Filter data to only include thermally challenged setups. Note that control tanks were only set to check that stress is not confounded by handling stress.
+
+```{r}
+survival_data_long_hstressed <- 
+  survival_data_long |> 
+  filter(Treatment == 'Heat-stressed')
+```
+
+Add percent mortality to the data.
+
+```{r}
+survival_data_long_hstressed <- 
+  survival_data_long_hstressed |> 
+  mutate('Survival (%)' = `Healthy fragments`/`N fragment`*100)
+```
+
+## Do statistics
+
+Before doing any plot-related work, set a color palette.
+
+```{r}
+species_color_palette <- 
+  c("#294557","#558981","#C6BF88")
+```
+
+Check normality of data per group. First, make qqplots per group.
+
+```{r}
+survival_data_long_hstressed_qqplots <- 
+  survival_data_long_hstressed |> 
+  ggplot(aes(sample = `Survival (%)`, color = Species)) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_grid(cols = vars(Species)) +
+  labs(y = 'Data value',
+       x = 'Normal value') +
+  scale_color_manual(values = species_color_palette) +
+  theme_bw() +
+  theme(strip.text = element_text(face = 'italic'),
+        legend.text = element_text(face = 'italic'))
+
+survival_data_long_hstressed_qqplots
+```
+
+Second, check histograms.
+
+```{r}
+survival_data_long_hstressed_histogram <- 
+  survival_data_long_hstressed |> 
+  ggplot(aes(x = `Survival (%)`, fill = Species)) +
+  geom_histogram(aes(y=..density..),position="identity") +
+  geom_density(alpha=0.6) +
+  facet_grid(cols = vars(Species)) +
+  scale_fill_manual(values = species_color_palette) +
+  scale_color_manual(values = species_color_palette) +
+  labs(y = 'Density') +
+  theme_bw() +
+  theme(strip.text = element_text(face = 'italic'),
+        legend.text = element_text(face = 'italic'))
+
+survival_data_long_hstressed_histogram
+```
+
+By now, it is certain that the data is not normal but additional normality test will be done using Shapiro-Wilk's method.
+
+```{r}
+survival_data_long_hstressed_sw <- 
+  survival_data_long_hstressed |>  
+  group_by(Species) |> 
+  mutate('Number of samples' = n()) |> 
+  nest() |> 
+  mutate(Shapiro = map(data, ~ shapiro.test(.x$`Survival (%)`))) |> 
+  mutate('Glance Shapiro' = Shapiro %>% map(glance)) %>%
+  unnest(`Glance Shapiro`)
+```
+
+## Plot survival over time
+
+```{r}
+survival_data_long_hstressed_plot <- 
+  survival_data_long_hstressed |> 
+  ggplot(aes(x = `Day elapsed`,
+             y = `Survival (%)`,
+             grop = Species,
+             color = Species,
+             fill = Species)) +
+  geom_vline(xintercept = 10, color = 'gray', linetype = 'dashed') +
+  stat_summary(fun = mean, size = 2, geom = "point") +
+  stat_summary(fun = mean, geom="line") +
+  scale_color_manual(values = species_color_palette) +
+  scale_fill_manual(values = species_color_palette) +
+  labs(x = 'Days elapsed') +
+  theme_bw() +
+  theme(legend.text = element_text(face = 'italic'),
+        panel.grid = element_blank())
+```
+
+## Comparing measures of central tendency
+
+To make comparisons, the day of termination of the species with the shortest exposure will be
+
+```{r}
+survival_data_long_hstressed_10days_barplot <- 
+  survival_data_long_hstressed |> 
+  filter(`Day elapsed` == 10) |> 
+  group_by(Species) %>%
+  mutate('log-transformed' = log(`Survival (%)` + 1)) |> 
+  ggplot(aes(x = Species,
+             y = `log-transformed`,
+             fill = Species,
+             color = Species)) + 
+  stat_summary(fun = mean, size = 4, geom = "point") +
+  geom_beeswarm()
+```
+
+# Mean intensity gray
