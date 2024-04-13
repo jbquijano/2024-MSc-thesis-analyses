@@ -17,20 +17,24 @@ self-contained: true
 ```{r}
 pacman::p_load(tidyverse,
                broom,
-               ggbeeswarm)
+               ggbeeswarm,
+               survminer,
+               survival)
 ```
 
-# Survival (daily mortality)
+# Figure 1A Inter-species (survival)
 
 ## Import data
 
 Import mortality data in long format in 3 species of *Acropora*.
 
 ```{r}
+#| warning: false
+
 survival_data_long_list <- 
-  list.files(recursive = T,
-             pattern = '*.csv',
-             full.names = T)
+  list.files(recursive = F,
+             pattern = 'daily-survival-data.csv',
+             full.names = F)
 
 survival_data_long <- 
   read_csv(survival_data_long_list,
@@ -42,7 +46,7 @@ Export.
 
 ```{r}
 write_csv(survival_data_long,
-          file = 'daily-survival-data.csv')
+          file = 'Figure-01-A-tables/daily-survival-data.csv')
 ```
 
 ## Clean data
@@ -67,111 +71,372 @@ survival_data_long_hstressed <-
   filter(Treatment == 'Heat-stressed')
 ```
 
-Add percent mortality to the data.
-
-```{r}
-survival_data_long_hstressed <- 
-  survival_data_long_hstressed |> 
-  mutate('Survival (%)' = `Healthy fragments`/`N fragment`*100)
-```
-
 ## Do statistics
 
 Before doing any plot-related work, set a color palette.
 
 ```{r}
-species_color_palette <- 
-  c("#294557","#558981","#C6BF88")
+species_color_palette <- c("#294557","#558981","#C6BF88")
 ```
 
-Check normality of data per group. First, make qqplots per group.
+Comparison of measures of central tendency was done at first but it was deemed that comparison of survival curves is more appropriate.
+
+### Kaplan-Meier curves
+
+Shape data to be appropriate for survival curves analysis.
 
 ```{r}
-survival_data_long_hstressed_qqplots <- 
+survival_data_long_hstressed_surv <- 
   survival_data_long_hstressed |> 
-  ggplot(aes(sample = `Survival (%)`, color = Species)) +
-  stat_qq() +
-  stat_qq_line() +
-  facet_grid(cols = vars(Species)) +
-  labs(y = 'Data value',
-       x = 'Normal value') +
-  scale_color_manual(values = species_color_palette) +
-  theme_bw() +
-  theme(strip.text = element_text(face = 'italic'),
-        legend.text = element_text(face = 'italic'))
+  select(c(1,4,5,7:9)) 
 
-survival_data_long_hstressed_qqplots
+# Make a tibble for A. millepora that extends to 13 days (for comparison with Adig)
+survival_data_long_hstressed_surv_amil <- 
+  survival_data_long_hstressed_surv |> 
+  filter(Species == 'A. millepora') |> 
+  distinct(Colony,
+           .keep_all = T) |> 
+  mutate('Days elapsed 11' = 11,
+         'Days elapsed 12' = 12,
+         'Days elapsed 13' = 13,
+         `Healthy fragments` = NA) |> 
+  select(!`Day elapsed`) |> 
+  pivot_longer(cols = !c(1:5),names_to = 'Days',values_to = 'Day elapsed') |> 
+  select(!Days)
+
+# Make a tibble for A. millepora that extends to 13 days (for comparison with Adig)
+survival_data_long_hstressed_surv_aten <- 
+  survival_data_long_hstressed_surv |> 
+  filter(Species == 'A. tenuis') |> 
+  distinct(Colony,
+           .keep_all = T) |> 
+  mutate('Days elapsed 11' = 11,
+         'Days elapsed 12' = 12,
+         'Days elapsed 13' = 13,
+         `Healthy fragments` = NA) |> 
+  select(!`Day elapsed`) |> 
+  pivot_longer(cols = !c(1:5),names_to = 'Days',values_to = 'Day elapsed') |> 
+  select(!Days)
+
+# Combine all tibbles
+survival_data_long_hstressed_surv <- 
+  survival_data_long_hstressed_surv |> 
+  bind_rows(survival_data_long_hstressed_surv_amil,
+            survival_data_long_hstressed_surv_aten)|> 
+  mutate(`Healthy fragments` = case_when(`Healthy fragments` == NA ~ 1,
+                                         .default = `Healthy fragments`))
 ```
 
-Second, check histograms.
+Make a dataframe that with status (censor).
 
 ```{r}
-survival_data_long_hstressed_histogram <- 
+#| warning: false
+survival_data_long_hstressed_surv_frags <- 
+  survival_data_long_hstressed_surv |> 
+  # Make a string, delimited by comma to make ID fragments
+  rowwise() %>%
+  mutate('Fragment ID' = paste0(Colony,
+                                '_',
+                                seq_len(`N fragment`), 
+                                collapse = ",")) %>%
+  ungroup() %>% 
+  # Separate them
+  separate(`Fragment ID`,
+           into = paste0("Fragment ID_", 
+                         1:max(str_count(.$`Fragment ID`, ",")) + 1),
+           sep = ",", 
+           remove = F,
+           extra = 'merge') |> 
+  separate(`Fragment ID_8`,
+           into = c('Fragment ID_9', 'Fragment ID_10'),
+           sep = ",", 
+           remove = T) |> 
+  # Remove Fragment ID
+  select(!`Fragment ID`) |> 
+  # Make tibble longer  
+  pivot_longer(cols = 7:14,
+               values_to = 'Fragment ID',
+               values_drop_na = T) |> 
+  select(!name) |> 
+  mutate('Fragment #' = str_sub(`Fragment ID`, -1, -1),
+         'Fragment #' = as.numeric(`Fragment #`)) |> 
+  mutate(status = case_when(`Healthy fragments` == NA ~ 1,
+                            `Healthy fragments` < `Fragment #` ~ 2,
+                            .default = 1))
+```
+
+Export shaped tibble.
+
+```{r}
+write_csv(survival_data_long_hstressed_surv_frags,
+          file = 'Figure-01-A-tables/daily-survival-data_survminer.csv')
+```
+
+Make plot.
+
+```{r}
+# Fit data
+survival_data_long_hstressed_surv_frags_fit <- 
+  survfit(Surv(`Day elapsed`, status) ~ Species, data = survival_data_long_hstressed_surv_frags)
+
+# Plot data
+survival_data_long_hstressed_surv_frags_fit_plot <- 
+  ggsurvplot(survival_data_long_hstressed_surv_frags_fit,
+             conf.int = T, 
+             data = survival_data_long_hstressed_surv_frags,
+             palette = species_color_palette, 
+             censor.shape = NA, ylim = c(.80, 1),
+             size = 1.5,
+             legend = 'right')
+```
+
+Export plot.
+
+```{r}
+survival_data_long_hstressed_surv_frags_fit_plot
+
+ggsave('Figure-01-A.png',
+       dpi = 900,
+       width = 7000, 
+       height = 3000, 
+       units = "px")
+```
+
+Make pairwise test.
+
+```{r}
+survival_data_long_hstressed_surv_frags_pval <- 
+  surv_pvalue(survival_data_long_hstressed_surv_frags_fit,
+                    data = survival_data_long_hstressed_surv_frags) 
+
+survival_data_long_hstressed_surv_frags_pwise <- 
+  pairwise_survdiff(Surv(`Day elapsed`, status) ~ Species,
+                    data = survival_data_long_hstressed_surv_frags) |> 
+  tidy()
+```
+
+Export stat tables.
+
+```{r}
+write_csv(survival_data_long_hstressed_surv_frags_pval,
+          'Figure-01-A-tables/km_log-rank_global.csv')
+
+write_csv(survival_data_long_hstressed_surv_frags_pwise,
+          'Figure-01-A-tables/km_log-rank_pairwise.csv')
+```
+
+# Figure 1B Intra-species (survival, MIG)
+
+## Survival
+
+### Clean data
+
+Shape the initially imported data. For this analysis, only the last day per species will be considered to get the proportion of fragment bleached at end of exposure (% survival).
+
+```{r}
+survival_data_long_hstressed_b <- 
   survival_data_long_hstressed |> 
-  ggplot(aes(x = `Survival (%)`, fill = Species)) +
-  geom_histogram(aes(y=..density..),position="identity") +
-  geom_density(alpha=0.6) +
-  facet_grid(cols = vars(Species)) +
-  scale_fill_manual(values = species_color_palette) +
-  scale_color_manual(values = species_color_palette) +
-  labs(y = 'Density') +
-  theme_bw() +
-  theme(strip.text = element_text(face = 'italic'),
-        legend.text = element_text(face = 'italic'))
-
-survival_data_long_hstressed_histogram
-```
-
-By now, it is certain that the data is not normal but additional normality test will be done using Shapiro-Wilk's method.
-
-```{r}
-survival_data_long_hstressed_sw <- 
-  survival_data_long_hstressed |>  
+  filter(`Day elapsed` >= 10) |> 
+  filter(!(Species == 'A. digitifera' & `Day elapsed` >= 10 & `Day elapsed` < 13)) |> 
+  mutate('% bleaching' = `Healthy fragments`/`N fragment` * 100) |> 
   group_by(Species) |> 
-  mutate('Number of samples' = n()) |> 
-  nest() |> 
-  mutate(Shapiro = map(data, ~ shapiro.test(.x$`Survival (%)`))) |> 
-  mutate('Glance Shapiro' = Shapiro %>% map(glance)) %>%
-  unnest(`Glance Shapiro`)
+  mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
+                            Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
+                            Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
+                            .default = Colony))
 ```
 
-## Plot survival over time
+### Plot
 
 ```{r}
-survival_data_long_hstressed_plot <- 
-  survival_data_long_hstressed |> 
-  ggplot(aes(x = `Day elapsed`,
-             y = `Survival (%)`,
-             grop = Species,
-             color = Species,
+survival_data_long_hstressed_b_p <- 
+  survival_data_long_hstressed_b |> 
+  ggplot(aes(y = reorder(Colony, `% bleaching`), 
+             x = `% bleaching`,
              fill = Species)) +
-  geom_vline(xintercept = 10, color = 'gray', linetype = 'dashed') +
-  stat_summary(fun = mean, size = 2, geom = "point") +
-  stat_summary(fun = mean, geom="line") +
-  scale_color_manual(values = species_color_palette) +
+  geom_bar(stat = 'identity') +
+  labs(y = 'Colony ID') +
+  facet_grid(rows = vars(Species),
+             scales = 'free',
+             space = 'free') +
   scale_fill_manual(values = species_color_palette) +
-  labs(x = 'Days elapsed') +
   theme_bw() +
-  theme(legend.text = element_text(face = 'italic'),
-        panel.grid = element_blank())
+  theme(panel.grid = element_blank(),
+        strip.text = element_blank())
 ```
 
-## Comparing measures of central tendency
-
-To make comparisons, the day of termination of the species with the shortest exposure will be
+Export plot.
 
 ```{r}
-survival_data_long_hstressed_10days_barplot <- 
-  survival_data_long_hstressed |> 
-  filter(`Day elapsed` == 10) |> 
-  group_by(Species) %>%
-  mutate('log-transformed' = log(`Survival (%)` + 1)) |> 
-  ggplot(aes(x = Species,
-             y = `log-transformed`,
-             fill = Species,
-             color = Species)) + 
-  stat_summary(fun = mean, size = 4, geom = "point") +
-  geom_beeswarm()
+ggsave(plot = survival_data_long_hstressed_b_p,
+       filename = 'Figure-01-B.png',
+       dpi = 900,
+       width = 2500, 
+       height = 10000, 
+       units = "px")
 ```
 
-# Mean intensity gray
+## Mean intensity gray
+
+### A. digitifera
+
+Import pre-exposure MIG data.
+
+```{r}
+mig_adig_pre <- 
+  read_csv('Figure-01-adig-all-pre_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Import post-exposure MIG data.
+
+```{r}
+mig_adig_post <- 
+  read_csv('Figure-01-adig-all-post_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Merge.
+
+```{r}
+mig_adig <- 
+  mig_adig_pre |>
+  left_join(mig_adig_post, 
+            by = c('Colony ID',
+                   'Tank ID',
+                   'Treatment',
+                   'Replicate'),
+            suffix = c(".pre", ".post"))
+```
+
+Compute change.
+
+```{r}
+mig_adig_change <- 
+  mig_adig |> 
+  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
+
+
+mig_adig_change_ave <- 
+  mig_adig_change |> 
+  drop_na() |> 
+  group_by(`Colony ID`, Treatment) |> 
+  summarise('mean' = mean(`% change`))
+
+mig_adig_change_median <- 
+  mig_adig_change |> 
+  drop_na() |> 
+  group_by(`Colony ID`, Treatment) |> 
+  summarise('median' = median(`% change`))
+```
+
+### A. millepora
+
+Import pre-exposure MIG data.
+
+```{r}
+mig_amil_pre <- 
+  read_csv('Figure-01-amil-all-pre_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Import post-exposure MIG data.
+
+```{r}
+mig_amil_post <- 
+  read_csv('Figure-01-amil-all-post_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Merge.
+
+```{r}
+mig_amil <- 
+  mig_amil_pre |>
+  left_join(mig_amil_post, 
+            by = c('Colony ID',
+                   'Tank ID',
+                   'Treatment',
+                   'Replicate'),
+            suffix = c(".pre", ".post"))
+```
+
+Compute change.
+
+```{r}
+mig_amil_change <- 
+  mig_amil |> 
+  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
+
+
+mig_amil_change_ave <- 
+  mig_amil_change |> 
+  drop_na() |> 
+  group_by(`Colony ID`, Treatment) |> 
+  summarise('mean' = mean(`% change`))
+
+mig_amil_change_median <- 
+  mig_amil_change |> 
+  drop_na() |> 
+  group_by(`Colony ID`, Treatment) |> 
+  summarise('median' = median(`% change`))
+```
+
+### A. tenuis
+
+Import pre-exposure MIG data.
+
+```{r}
+mig_aten_pre <- 
+  read_csv('Figure-01-aten-all-pre_mig-data.csv')
+```
+
+Import post-exposure MIG data.
+
+```{r}
+mig_aten_post <- 
+  read_csv('Figure-01-aten-all-post_mig-data.csv')
+```
+
+Import pre-exposure MIG data.
+
+```{r}
+mig_data_pre_list <- 
+  list.files(recursive = F,
+             pattern = '*all-pre_mig-data.csv',
+             full.names = F)
+
+mig_data_pre_long <- 
+  read_csv(mig_data_pre_list,
+           id = 'file_name') |> 
+  select(!1) |> 
+  select(!c(3,4))
+```
+
+Import post-exposure MIG data.
+
+```{r}
+mig_data_post_list <- 
+  list.files(recursive = F,
+             pattern = '*all-post_mig-data.csv',
+             full.names = F)
+
+mig_data_post_long <- 
+  read_csv(mig_data_post_list,
+           id = 'file_name') |> 
+  select(!1) |> 
+  select(!c(3,4))
+```
+
+Merge tibbles.
+
+```{r}
+mig_data <- 
+  mig_data_pre_long |> 
+  left_join(mig_data_post_long, 
+            by = 'Colony ID')
+```
