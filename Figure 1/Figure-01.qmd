@@ -19,12 +19,21 @@ pacman::p_load(tidyverse,
                broom,
                ggbeeswarm,
                survminer,
-               survival)
+               survival,
+               tidytext,
+               cowplot)
 ```
 
 # Figure 1A Inter-species (survival)
 
 ## Import data
+
+Import metadata.
+
+```{r}
+metadata <- 
+  read_csv('Figure-01-metadata.csv')
+```
 
 Import mortality data in long format in 3 species of *Acropora*.
 
@@ -238,7 +247,7 @@ survival_data_long_hstressed_b <-
   survival_data_long_hstressed |> 
   filter(`Day elapsed` >= 10) |> 
   filter(!(Species == 'A. digitifera' & `Day elapsed` >= 10 & `Day elapsed` < 13)) |> 
-  mutate('% bleaching' = `Healthy fragments`/`N fragment` * 100) |> 
+  mutate('% fragments healthy' = `Healthy fragments`/`N fragment` * 100) |> 
   group_by(Species) |> 
   mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
                             Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
@@ -251,14 +260,16 @@ survival_data_long_hstressed_b <-
 ```{r}
 survival_data_long_hstressed_b_p <- 
   survival_data_long_hstressed_b |> 
-  ggplot(aes(y = reorder(Colony, `% bleaching`), 
-             x = `% bleaching`,
+  ggplot(aes(y = reorder(Colony, `% fragments healthy`), 
+             x = `% fragments healthy`,
              fill = Species)) +
   geom_bar(stat = 'identity') +
   labs(y = 'Colony ID') +
   facet_grid(rows = vars(Species),
              scales = 'free',
              space = 'free') +
+  scale_y_discrete(position = 'right') +
+  scale_x_reverse() +
   scale_fill_manual(values = species_color_palette) +
   theme_bw() +
   theme(panel.grid = element_blank(),
@@ -269,7 +280,7 @@ Export plot.
 
 ```{r}
 ggsave(plot = survival_data_long_hstressed_b_p,
-       filename = 'Figure-01-B.png',
+       filename = 'Figure-01-B1.png',
        dpi = 900,
        width = 2500, 
        height = 10000, 
@@ -318,18 +329,12 @@ mig_adig_change <-
   mig_adig |> 
   mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
 
-
-mig_adig_change_ave <- 
+mig_adig_change_clean <- 
   mig_adig_change |> 
-  drop_na() |> 
-  group_by(`Colony ID`, Treatment) |> 
-  summarise('mean' = mean(`% change`))
-
-mig_adig_change_median <- 
-  mig_adig_change |> 
-  drop_na() |> 
-  group_by(`Colony ID`, Treatment) |> 
-  summarise('median' = median(`% change`))
+  filter(Treatment == 'Heat-stressed') |> 
+  select(`Colony ID`, `% change`) |> 
+  mutate(`Colony ID` = str_replace(`Colony ID`, "ADIG", "D")) |> 
+  mutate(Species = 'A. digitifera')
 ```
 
 ### A. millepora
@@ -372,18 +377,17 @@ mig_amil_change <-
   mig_amil |> 
   mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
 
-
-mig_amil_change_ave <- 
+mig_amil_change_clean <- 
   mig_amil_change |> 
-  drop_na() |> 
-  group_by(`Colony ID`, Treatment) |> 
-  summarise('mean' = mean(`% change`))
-
-mig_amil_change_median <- 
-  mig_amil_change |> 
-  drop_na() |> 
-  group_by(`Colony ID`, Treatment) |> 
-  summarise('median' = median(`% change`))
+  filter(Treatment == 'Heat-stressed') |> 
+  select(`Colony ID`, `% change`) |> 
+  left_join(metadata |> rename(`Colony ID` = `Untransformed ID`) |> 
+              select(2,4), 
+            by = 'Colony ID') |> 
+  relocate(1,3) |> 
+  select(!1) |> 
+  rename('Colony ID' = `Transformed ID2`) |> 
+  mutate(Species = 'A. millepora')
 ```
 
 ### A. tenuis
@@ -392,51 +396,112 @@ Import pre-exposure MIG data.
 
 ```{r}
 mig_aten_pre <- 
-  read_csv('Figure-01-aten-all-pre_mig-data.csv')
+  read_csv('Figure-01-aten-all-pre_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
 ```
 
 Import post-exposure MIG data.
 
 ```{r}
 mig_aten_post <- 
-  read_csv('Figure-01-aten-all-post_mig-data.csv')
+  read_csv('Figure-01-aten-all-post_mig-data.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
 ```
 
-Import pre-exposure MIG data.
+Merge.
 
 ```{r}
-mig_data_pre_list <- 
-  list.files(recursive = F,
-             pattern = '*all-pre_mig-data.csv',
-             full.names = F)
-
-mig_data_pre_long <- 
-  read_csv(mig_data_pre_list,
-           id = 'file_name') |> 
-  select(!1) |> 
-  select(!c(3,4))
+mig_aten <- 
+  mig_aten_pre |>
+  left_join(mig_aten_post, 
+            by = c('Colony ID',
+                   'Tank ID',
+                   'Treatment',
+                   'Replicate'),
+            suffix = c(".pre", ".post"))
 ```
 
-Import post-exposure MIG data.
+Compute change.
 
 ```{r}
-mig_data_post_list <- 
-  list.files(recursive = F,
-             pattern = '*all-post_mig-data.csv',
-             full.names = F)
+mig_aten_change <- 
+  mig_aten |> 
+  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
 
-mig_data_post_long <- 
-  read_csv(mig_data_post_list,
-           id = 'file_name') |> 
-  select(!1) |> 
-  select(!c(3,4))
+mig_aten_change_clean <- 
+  mig_aten_change |> 
+  filter(Treatment == 'Heat-stressed') |> 
+  select(`Colony ID`, `% change`) |> 
+  mutate(`Colony ID` = str_replace(`Colony ID`, "ATEN", "T")) |> 
+  mutate(Species = 'A. tenuis')
 ```
 
-Merge tibbles.
+### Merge dataframes
 
 ```{r}
-mig_data <- 
-  mig_data_pre_long |> 
-  left_join(mig_data_post_long, 
-            by = 'Colony ID')
+mig_all_clean <- 
+  bind_rows(mig_adig_change_clean,
+            mig_amil_change_clean,
+            mig_aten_change_clean)
+
+# Make a df that will allow you to reorder and rank colonies based on MIG change averages
+mig_all_clean_ave <- 
+  mig_all_clean |> 
+  dplyr::group_by(`Colony ID`) |> 
+  drop_na() |> 
+  mutate(Mean = mean(`% change`)) |> 
+  ungroup()
+```
+
+### Plot
+
+```{r}
+mig_all_p <- 
+  mig_all_clean_ave |> 
+  mutate(`Colony ID` = reorder_within(`Colony ID`, desc(Mean), Species)) |> 
+  ggplot(aes(x = `Colony ID`,
+             y = `% change`,
+             fill = Species,
+             color = Species)) + 
+  geom_point(size = 0.5,
+             alpha = 0.25) +
+  geom_hline(yintercept = 0,
+             linetype = 'dashed',
+             color = 'black',
+             linewidth = 0.25) +
+  stat_summary(fun = 'mean',
+               size = 0.1) +
+  facet_grid(vars(cols = Species),
+             scales = 'free',
+             space = 'free') +
+  scale_fill_manual(values = species_color_palette) +
+  scale_color_manual(values = species_color_palette) +
+  coord_flip() +
+  scale_x_reordered() +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank())
+```
+
+Merge with initial plot.
+
+```{r}
+figure_01 <- 
+  plot_grid(survival_data_long_hstressed_b_p,
+          mig_all_p,
+          align = 'hv')
+```
+
+Export plot.
+
+```{r}
+ggsave(plot = figure_01,
+       filename = 'Figure-01.png',
+       dpi = 900,
+       width = 7500, 
+       height = 10000, 
+       units = "px")
 ```
