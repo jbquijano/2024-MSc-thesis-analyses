@@ -21,7 +21,8 @@ pacman::p_load(tidyverse,
                survminer,
                survival,
                tidytext,
-               cowplot)
+               cowplot,
+               factoextra)
 ```
 
 # Figure 1A Inter-species (survival)
@@ -86,6 +87,7 @@ Before doing any plot-related work, set a color palette.
 
 ```{r}
 species_color_palette <- c("#294557","#558981","#C6BF88")
+htol_color_palette <- c("#B2182B", "#2166AC")
 ```
 
 Comparison of measures of central tendency was done at first but it was deemed that comparison of survival curves is more appropriate.
@@ -252,7 +254,21 @@ survival_data_long_hstressed_b <-
   mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
                             Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
                             Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
-                            .default = Colony))
+                            .default = Colony)) |> 
+  mutate('Proportion of fragments bleached, %' = 100 - `% fragments healthy`)
+```
+
+Export data.
+
+```{r}
+survival_data_ranked <- 
+  survival_data_long_hstressed_b |> 
+  group_by(Species) |> 
+  arrange(`Proportion of fragments bleached, %`, .by_group = TRUE) |> 
+  mutate(Ranking  = seq_along(Species))
+
+survival_data_ranked |> 
+  write_csv('Figure-01-A-tables/ranking-all_fragment-bleaching.csv')
 ```
 
 ### Plot
@@ -260,8 +276,8 @@ survival_data_long_hstressed_b <-
 ```{r}
 survival_data_long_hstressed_b_p <- 
   survival_data_long_hstressed_b |> 
-  ggplot(aes(y = reorder(Colony, `% fragments healthy`), 
-             x = `% fragments healthy`,
+  ggplot(aes(y = reorder(Colony, desc(`Proportion of fragments bleached, %`)), 
+             x = `Proportion of fragments bleached, %`,
              fill = Species)) +
   geom_bar(stat = 'identity') +
   labs(y = 'Colony ID') +
@@ -289,7 +305,7 @@ ggsave(plot = survival_data_long_hstressed_b_p,
 
 ## Mean intensity gray
 
-### A. digitifera
+### *A. digitifera*
 
 Import pre-exposure MIG data.
 
@@ -337,7 +353,7 @@ mig_adig_change_clean <-
   mutate(Species = 'A. digitifera')
 ```
 
-### A. millepora
+### *A. millepora*
 
 Import pre-exposure MIG data.
 
@@ -390,7 +406,7 @@ mig_amil_change_clean <-
   mutate(Species = 'A. millepora')
 ```
 
-### A. tenuis
+### *A. tenuis*
 
 Import pre-exposure MIG data.
 
@@ -428,7 +444,8 @@ Compute change.
 ```{r}
 mig_aten_change <- 
   mig_aten |> 
-  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
+  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100) |> 
+  filter(!`Colony ID` %in% unresolved_colonies)
 
 mig_aten_change_clean <- 
   mig_aten_change |> 
@@ -453,6 +470,20 @@ mig_all_clean_ave <-
   drop_na() |> 
   mutate(Mean = mean(`% change`)) |> 
   ungroup()
+```
+
+Export data.
+
+```{r}
+ranking_all_mig <- 
+  mig_all_clean_ave |> 
+  group_by(Species) |> 
+  arrange(Mean, .by_group = TRUE) |> 
+  distinct(`Colony ID`,.keep_all = T) |> 
+  mutate(Ranking  = seq_along(Species))
+
+write_csv(ranking_all_mig,
+          'Figure-01-A-tables/ranking-all_mig.csv')
 ```
 
 ### Plot
@@ -504,4 +535,450 @@ ggsave(plot = figure_01,
        width = 7500, 
        height = 10000, 
        units = "px")
+```
+
+## Survival + MIG
+
+An additional dataset, combining proportion of fragments bleaching and MIG values, was made to check possible changes in classification based on actual bleaching records and image analysis-derived data.
+
+Combine datasets.
+
+```{r}
+survival_mig <- 
+  survival_data_long_hstressed_b |> 
+  ungroup() |> 
+  select(Colony, `Proportion of fragments bleached, %`) |> 
+  rename('Colony ID' = Colony) |> 
+  left_join(ranking_all_mig |> select(!`% change`), by = 'Colony ID') |> 
+  relocate(Species)
+```
+
+Make a function for min-max normalization.
+
+```{r}
+minmax_norm <- 
+  function(x){
+    (x - min(x)) /(max(x) - min(x))
+  }
+```
+
+Standardize proportion of fragments bleached and MIG values.
+
+```{r}
+survival_mig_standard <- 
+  survival_mig |> 
+  group_by(Species) |> 
+  mutate(`Proportion of fragments bleached, %` = minmax_norm(`Proportion of fragments bleached, %`),
+         Mean = minmax_norm(Mean),
+         Combined = `Proportion of fragments bleached, %` + Mean)
+```
+
+Rank colonies based on combined standardized values.
+
+```{r}
+survival_mig_rank <- 
+  survival_mig_standard |> 
+  select(!Ranking) |> 
+  group_by(Species) |> 
+  arrange(Combined, .by_group = TRUE) |> 
+  mutate(Ranking  = seq_along(Species))
+
+survival_mig_rank |> 
+  write_csv('Figure-01-A-tables/ranking-all_fragment-bleaching_mig.csv')
+```
+
+## Clustering/grouping
+
+Additional clustering metric was used to find support for the tolerance grouping based on phenotype ranking.
+
+### *A. digitifera*
+
+Filter to get only *A. digitifera* samples.
+
+```{r}
+# Edit dataframe to get A. digitifera samples
+kmeans_data_adig <- 
+  survival_mig |> 
+  filter(Species == 'A. digitifera') |>
+  select(!c(Ranking, Species)) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+kmeans_adig_wss <- 
+  fviz_nbclust(kmeans_data_adig,
+               kmeans,
+               method = "wss",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 2 (gap)
+kmeans_adig_gap <- 
+  fviz_nbclust(kmeans_data_adig, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 3 (sillhouette)
+kmeans_adig_sil <- 
+  fviz_nbclust(kmeans_data_adig, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Merge plots that check optimal # of clusters
+kmeans_adig_optimal_clustering <- 
+  plot_grid(kmeans_adig_wss, 
+            kmeans_adig_gap, 
+            kmeans_adig_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+kmeans_adig_plot <- 
+  kmeans_data_adig |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(kmeans_data_adig,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG values',
+               xlab = 'Proportion of fragments bleached') +
+  scale_fill_manual(values = rev(htol_color_palette)) +
+  scale_color_manual(values = rev(htol_color_palette)) +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none')
+
+# Extract clusters
+kmeans_adig_plot_df <- 
+  kmeans_data_adig |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 1, 
+                                 'Low', 
+                                 'High'))
+```
+
+Export.
+
+```{r}
+ggsave(kmeans_adig_plot,
+       filename = 'Figure-S01_1_adig.png',
+       dpi = 900,
+       width = 4000, 
+       height = 4000, 
+       units = "px")
+
+ggsave(kmeans_adig_optimal_clustering,
+       filename = 'Figure-S01_2_adig.png',
+       dpi = 900,
+       width = 8000, 
+       height = 3000, 
+       units = "px")
+
+write_csv(kmeans_adig_plot_df,
+          'Figure-01-A-tables/clusters_adig.csv')
+```
+
+### *A. millepora*
+
+Filter to get only *A. millepora* samples.
+
+```{r}
+# Edit dataframe to get A. digitifera samples
+kmeans_data_amil <- 
+  survival_mig |> 
+  filter(Species == 'A. millepora') |>
+  select(!c(Ranking, Species)) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+kmeans_amil_wss <- 
+  fviz_nbclust(kmeans_data_amil,
+               kmeans,
+               method = "wss",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 2 (gap)
+kmeans_amil_gap <- 
+  fviz_nbclust(kmeans_data_amil, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 3 (sillhouette)
+kmeans_amil_sil <- 
+  fviz_nbclust(kmeans_data_amil, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Merge plots that check optimal # of clusters
+kmeans_amil_optimal_clustering <- 
+  plot_grid(kmeans_amil_wss, 
+            kmeans_amil_gap, 
+            kmeans_amil_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+kmeans_amil_plot <- 
+  kmeans_data_amil |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(kmeans_data_amil,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG values',
+               xlab = 'Proportion of fragments bleached') +
+  scale_fill_manual(values = rev(htol_color_palette)) +
+  scale_color_manual(values = rev(htol_color_palette)) +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none')
+
+# Extract clusters
+kmeans_amil_plot_df <- 
+  kmeans_data_amil |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 1, 
+                                 'Low', 
+                                 'High'))
+```
+
+Export.
+
+```{r}
+ggsave(kmeans_amil_plot,
+       filename = 'Figure-S01_1_amil.png',
+       dpi = 900,
+       width = 4000, 
+       height = 4000, 
+       units = "px")
+
+ggsave(kmeans_amil_optimal_clustering,
+       filename = 'Figure-S01_2_amil.png',
+       dpi = 900,
+       width = 8000, 
+       height = 3000, 
+       units = "px")
+
+write_csv(kmeans_amil_plot_df,
+          'Figure-01-A-tables/clusters_amil.csv')
+```
+
+### *A. tenuis*
+
+Filter to get only *A. tenuis* samples.
+
+```{r}
+# Edit dataframe to get A. digitifera samples
+kmeans_data_aten <- 
+  survival_mig |> 
+  filter(Species == 'A. tenuis') |>
+  select(!c(Ranking, Species)) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+kmeans_aten_wss <- 
+  fviz_nbclust(kmeans_data_aten,
+               kmeans,
+               method = "wss",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 2 (gap)
+kmeans_aten_gap <- 
+  fviz_nbclust(kmeans_data_aten, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Optimal cluster checking 3 (sillhouette)
+kmeans_aten_sil <- 
+  fviz_nbclust(kmeans_data_aten, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10) +
+  theme(plot.title = element_blank())
+
+# Merge plots that check optimal # of clusters
+kmeans_aten_optimal_clustering <- 
+  plot_grid(kmeans_aten_wss, 
+            kmeans_aten_gap, 
+            kmeans_aten_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+kmeans_aten_plot <- 
+  kmeans_data_aten |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(kmeans_data_aten,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG values',
+               xlab = 'Proportion of fragments bleached') +
+  scale_fill_manual(values = rev(htol_color_palette)) +
+  scale_color_manual(values = rev(htol_color_palette)) +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none')
+
+# Extract clusters
+kmeans_aten_plot_df <- 
+  kmeans_data_aten |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 2, 
+                                 'Low', 
+                                 'High'))
+```
+
+Export.
+
+```{r}
+ggsave(kmeans_aten_plot,
+       filename = 'Figure-S01_1_aten.png',
+       dpi = 900,
+       width = 4000, 
+       height = 4000, 
+       units = "px")
+
+ggsave(kmeans_aten_optimal_clustering,
+       filename = 'Figure-S01_2_aten.png',
+       dpi = 900,
+       width = 8000, 
+       height = 3000, 
+       units = "px")
+
+write_csv(kmeans_aten_plot_df,
+          'Figure-01-A-tables/clusters_aten.csv')
+```
+
+### Merge dataframes
+
+```{r}
+kmeans_all_df <- 
+  bind_rows(kmeans_adig_plot_df,
+            kmeans_amil_plot_df,
+            kmeans_aten_plot_df) |> 
+  mutate(Species = case_when(str_detect(ColonyID, 'D') ~ 'A. digitifera',
+                             str_detect(ColonyID, 'M') ~ 'A. millepora',
+                             str_detect(ColonyID, 'T') ~ 'A. tenuis',
+                             .default = NA)) |> 
+  group_by(Species) |> 
+  arrange(HeatTolerance,
+          .by_group = T)
+```
+
+## Merged ranking
+
+Decide heat tolerance based on ranking.
+
+### Survival data
+
+```{r}
+htol_survival_data <- 
+  survival_data_ranked |> 
+  mutate('Heat tolerance' = ifelse(`Proportion of fragments bleached, %` >= 50, "Low", "High"))
+
+htol_survival_data_clean <- 
+  htol_survival_data |> 
+  select(1,5,12,13) |> 
+  rename('Survival-based ranking' = Ranking,
+         'Survival-based heat tolerance' = `Heat tolerance`)
+```
+
+### MIG data
+
+```{r}
+htol_mig_data <- 
+  ranking_all_mig |> 
+  rename(Colony = `Colony ID`) |> 
+  mutate('Heat tolerance' = case_when(Species == 'A. digitifera' & Ranking <= 8 ~ 'High',
+                                      Species == 'A. digitifera' & Ranking >= 33 ~ 'Low',
+                                      Species == 'A. millepora' & Ranking <= 6 ~ 'High',
+                                      Species == 'A. millepora' & Ranking >= 25 ~ 'Low',
+                                      Species == 'A. tenuis' & Ranking <= 5 ~ 'High',
+                                      Species == 'A. tenuis' & Ranking >= 21 ~ 'Low',
+                                      .default = 'Intermediate')) |> 
+  relocate(3)
+
+htol_mig_data_clean <- 
+  htol_mig_data |> 
+  select(1,2,5,6) |> 
+  rename('MIG-based ranking' = Ranking,
+         'MIG-based heat tolerance' = `Heat tolerance`)
+```
+
+### Survival-MIG data
+
+```{r}
+htol_surv_mig_data <- 
+  survival_mig_rank |> 
+  rename(Colony = `Colony ID`) |> 
+  mutate('Heat tolerance' = case_when(Species == 'A. digitifera' & Ranking <= 8 ~ 'High',
+                                      Species == 'A. digitifera' & Ranking >= 33 ~ 'Low',
+                                      Species == 'A. millepora' & Ranking <= 6 ~ 'High',
+                                      Species == 'A. millepora' & Ranking >= 25 ~ 'Low',
+                                      Species == 'A. tenuis' & Ranking <= 5 ~ 'High',
+                                      Species == 'A. tenuis' & Ranking >= 21 ~ 'Low',
+                                      .default = 'Intermediate'))
+
+htol_surv_mig_data_clean <- 
+  htol_surv_mig_data |> 
+  select(1,2,6,7) |> 
+  rename('Survival+MIG-based ranking' = Ranking,
+         'Survival+MIG-based heat tolerance' = `Heat tolerance`)
+```
+
+### Kmeans clustered data
+
+```{r}
+htol_kmeans_data <- 
+  kmeans_all_df |> 
+  relocate(Species) |> 
+  rename(Colony = ColonyID) |> 
+  select(!Cluster)
+
+htol_kmeans_data_clean <- 
+  htol_kmeans_data |> 
+  rename('kmeans-based heat tolerance' = HeatTolerance)
+```
+
+### Merged heat tolerance data
+
+```{r}
+htol_merged <-
+  htol_mig_data_clean |> 
+  left_join(htol_survival_data_clean) |> 
+  left_join(htol_surv_mig_data_clean) |> 
+  left_join(htol_kmeans_data_clean)
 ```
