@@ -1,0 +1,1191 @@
+---
+title: "Chapter 1"
+format: html
+theme: 
+  light: zephyr
+  dark: cyborg
+toc: true
+page-layout: full
+number-sections: true
+number-depth: 3
+editor: visual
+self-contained: true
+---
+
+# Load libraries
+
+```{r}
+pacman::p_load(tidyverse,
+               broom,
+               ggbeeswarm,
+               survminer,
+               survival,
+               tidytext,
+               cowplot,
+               factoextra)
+```
+
+# A: Inter-species
+
+## Import data
+
+Import metadata.
+
+```{r}
+metadata <- 
+  read_csv('../Raw/chap01_metadata.csv')
+```
+
+Import mortality data in long format in 3 species of *Acropora*.
+
+```{r}
+#| warning: false
+
+A_mortality_c <- 
+  list.files(path = '../Raw/',
+             recursive = F,
+             pattern = 'daily-survival.csv',
+             full.names = T)
+
+A_mortality_df <- 
+  read_csv(A_mortality_c,
+           id = 'file_name') |> 
+  select(!1)
+```
+
+```{r}
+#| echo: false
+A_mortality_df
+```
+
+Export raw, compiled data.
+
+```{r}
+#| eval: false
+write_csv(A_mortality_df,
+          file = '../Results/Tables/A_mortality_df.csv')
+```
+
+## Clean data
+
+Among the Acropora species, only *A. tenuis* showed mortality in the control tanks during exposure. These will not be included in further analyses, cutting the A. tenuis colonies that will be included to 25.
+
+These colonies are: ATEN07, ATEN08, ATEN09, ATEN24, ATEN25.
+
+```{r}
+A1_mortality_unres_c <- c("ATEN07","ATEN08","ATEN09","ATEN24","ATEN25")
+
+A_mortality_df <- 
+  A_mortality_df |> 
+  filter(!Colony %in% A1_mortality_unres_c)
+```
+
+Filter data to only include thermally challenged setups. Note that control tanks were only set to check that stress is not confounded by handling stress.
+
+```{r}
+A_mortality_heat_df <- 
+  A_mortality_df |> 
+  filter(Treatment == 'Heat-stressed')
+```
+
+## Do stats
+
+Before doing any plot-related work, set a color palette.
+
+```{r}
+color_species_c <- c("#294557","#558981","#C6BF88")
+color_htol_c <- c("#B2182B", "#2166AC")
+color_htol_int_c <- c("#B2182B","gray", "#2166AC")
+```
+
+Comparison of measures of central tendency was done at first but it was deemed that comparison of survival curves is more appropriate.
+
+### Kaplan-Meier
+
+Shape data to be appropriate for survival curves analysis.
+
+```{r}
+A_mortality_km_df <-
+  A_mortality_heat_df |> 
+  select(c(1,4,5,7:9)) 
+
+# Make a tibble for A. millepora that extends to 13 days (for comparison with Adig)
+A_mortality_amil_df <- 
+  A_mortality_km_df |> 
+  filter(Species == 'A. millepora') |> 
+  distinct(Colony,
+           .keep_all = T) |> 
+  mutate('Days elapsed 11' = 11,
+         'Days elapsed 12' = 12,
+         'Days elapsed 13' = 13,
+         `Healthy fragments` = NA) |> 
+  select(!`Day elapsed`) |> 
+  pivot_longer(cols = !c(1:5),names_to = 'Days',values_to = 'Day elapsed') |> 
+  select(!Days)
+
+# Make a tibble for A. millepora that extends to 13 days (for comparison with Adig)
+A_mortality_aten_df <- 
+  A_mortality_km_df |> 
+  filter(Species == 'A. tenuis') |> 
+  distinct(Colony,
+           .keep_all = T) |> 
+  mutate('Days elapsed 11' = 11,
+         'Days elapsed 12' = 12,
+         'Days elapsed 13' = 13,
+         `Healthy fragments` = NA) |> 
+  select(!`Day elapsed`) |> 
+  pivot_longer(cols = !c(1:5),names_to = 'Days',values_to = 'Day elapsed') |> 
+  select(!Days)
+
+# Combine all tibbles
+A_mortality_all_df <- 
+  A_mortality_km_df |> 
+  bind_rows(A_mortality_amil_df,
+            A_mortality_aten_df)|> 
+  mutate(`Healthy fragments` = case_when(`Healthy fragments` == NA ~ 1,
+                                         .default = `Healthy fragments`))
+```
+
+Make a dataframe that with status (censor).
+
+```{r}
+#| warning: false
+A_mortality_all_df <- 
+  A_mortality_all_df |> 
+  # Make a string, delimited by comma to make ID fragments
+  rowwise() %>%
+  mutate('Fragment ID' = paste0(Colony,
+                                '_',
+                                seq_len(`N fragment`), 
+                                collapse = ",")) %>%
+  ungroup() %>% 
+  # Separate them
+  separate(`Fragment ID`,
+           into = paste0("Fragment ID_", 
+                         1:max(str_count(.$`Fragment ID`, ",")) + 1),
+           sep = ",", 
+           remove = F,
+           extra = 'merge') |> 
+  separate(`Fragment ID_8`,
+           into = c('Fragment ID_9', 'Fragment ID_10'),
+           sep = ",", 
+           remove = T) |> 
+  # Remove Fragment ID
+  select(!`Fragment ID`) |> 
+  # Make tibble longer  
+  pivot_longer(cols = 7:14,
+               values_to = 'Fragment ID',
+               values_drop_na = T) |> 
+  select(!name) |> 
+  mutate('Fragment #' = str_sub(`Fragment ID`, -1, -1),
+         'Fragment #' = as.numeric(`Fragment #`)) |> 
+  mutate(status = case_when(`Healthy fragments` == NA ~ 1,
+                            `Healthy fragments` < `Fragment #` ~ 2,
+                            .default = 1))
+```
+
+Export shaped tibble.
+
+```{r}
+write_csv(A_mortality_all_df,
+          file = '../Results/Tables/A_mortality_all_km_df.csv')
+```
+
+Make plot.
+
+```{r}
+# Fit data
+A_mortality_all_km <- 
+  survfit(Surv(`Day elapsed`, status) ~ Species, data = A_mortality_all_df)
+
+# Plot data
+A_mortality_all_km_p <- 
+  ggsurvplot(A_mortality_all_km,
+             conf.int = T, 
+             data = A_mortality_all_df,
+             palette = color_species_c, 
+             censor.shape = NA, ylim = c(.80, 1),
+             size = 1.5,
+             legend = 'right')
+```
+
+Export plot.
+
+```{r}
+A_mortality_all_km_p
+
+ggsave('../Results/Figures/kaplan-meier.png',
+       dpi = 900,
+       width = 7000, 
+       height = 3000, 
+       units = "px")
+```
+
+Make a global log-rank test.
+
+```{r}
+A_mortality_km_glob_s <- 
+  surv_pvalue(A_mortality_all_km,
+              data = A_mortality_all_df)
+
+# Export
+write_csv(A_mortality_km_glob_s,
+          '../Results/Tables/A_mortality_km_glob_s.csv')
+```
+
+Make a pairwise log-rank test.
+
+```{r}
+A_mortality_km_pair_s <- 
+  pairwise_survdiff(Surv(`Day elapsed`, status) ~ Species,
+                    data = A_mortality_all_df,
+                    p.adjust.method = 'BH') |> 
+  tidy()
+
+# Export
+write_csv(A_mortality_km_pair_s,
+          '../Results/Tables/A_mortality_km_pair_s.csv')
+```
+
+# Inter-individual
+
+## B: Survival-based
+
+### Clean data
+
+Shape the initially imported data. For this analysis, only the last day per species will be considered to get the proportion of fragment bleached at end of exposure (% survival).
+
+```{r}
+B_individual_mort_df <- 
+  A_mortality_heat_df |> 
+  filter(`Day elapsed` >= 10) |> 
+  filter(!(Species == 'A. digitifera' & `Day elapsed` >= 10 & `Day elapsed` < 13)) |> 
+  mutate('% fragments healthy' = `Healthy fragments`/`N fragment` * 100) |> 
+  group_by(Species) |> 
+  mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
+                            Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
+                            Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
+                            .default = Colony)) |> 
+  mutate('Proportion of fragments bleached, %' = 100 - `% fragments healthy`)
+```
+
+Rank and export data.
+
+```{r}
+B_individual_mort_rank_df <- 
+  B_individual_mort_df |> 
+  group_by(Species) |> 
+  arrange(`Proportion of fragments bleached, %`, .by_group = TRUE) |> 
+  mutate(Ranking  = seq_along(Species),
+         'Heat tolerance' = ifelse(`Proportion of fragments bleached, %` >= 50, "Low", "High")) 
+
+B_individual_mort_rank_df |> 
+  write_csv('../Results/Tables/B_individual_mort_rank_df.csv')
+```
+
+### Plot
+
+Make a plot function.
+
+```{r}
+B_individual_mort_f <- 
+  function(x){
+    x |> 
+      ggplot(aes(x = reorder(Colony, desc(`Proportion of fragments bleached, %`)), 
+                 y = `Proportion of fragments bleached, %`,
+                 fill = `Heat tolerance`)) +
+      geom_bar(stat = 'identity',
+               alpha = 0.90) +
+      facet_grid(cols = vars(Species), 
+                 scales = 'free',
+                 space = 'free',
+                 axes = 'all',
+                 axis.labels = 'all') +
+      scale_fill_manual(values = color_htol_c) +
+      scale_y_continuous(limits = c(0,100), 
+                         expand = expansion(0, 0)) +
+      theme(panel.grid = element_blank(),
+            axis.title.x = element_blank(),
+            strip.background = element_blank(),
+            axis.line = element_line(),
+            panel.background = element_rect(fill = '#F5F5F5'),
+            panel.grid.major.y = element_line(colour = 'white',
+                                              linewidth = 0.75),
+            panel.grid.minor.y = element_line(colour = 'white',
+                                              linewidth = 0.25),
+            strip.text = element_text(face = 'italic'))
+  }
+```
+
+Plot.
+
+```{r}
+B_individual_mort_all_p <- 
+  B_individual_mort_rank_df |> 
+  B_individual_mort_f()
+```
+
+Export.
+
+```{r}
+ggsave(plot = B_individual_mort_all_p,
+       filename = '../Results/Figures/individual-mort.png',
+       dpi = 900,
+       width = 25000, 
+       height = 2000, 
+       units = "px")
+```
+
+## C: MIG
+
+### *A. digitifera*
+
+Import pre-exposure MIG data.
+
+```{r}
+C_individual_mig_ad_pre_df <- 
+  read_csv('../Raw/chap01_adig_mig_pre.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Import post-exposure MIG data.
+
+```{r}
+C_individual_mig_ad_post_df <- 
+  read_csv('../Raw/chap01_adig_mig_post.csv') |> 
+  mutate(Replicate = rep(c(1,2),
+                         length.out = n()))
+```
+
+Merge.
+
+```{r}
+C_individual_mig_ad_df <- 
+  C_individual_mig_ad_pre_df |>
+  left_join(C_individual_mig_ad_post_df, 
+            by = c('Colony ID',
+                   'Tank ID',
+                   'Treatment',
+                   'Replicate'),
+            suffix = c(".pre", ".post"))
+```
+
+Compute change.
+
+```{r}
+# Compute
+C_individual_mig_ad_df <- 
+  C_individual_mig_ad_df |> 
+  mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)
+
+# Clean
+C_individual_mig_ad_df <- 
+  C_individual_mig_ad_df |> 
+  filter(Treatment == 'Heat-stressed') |> 
+  select(`Colony ID`, `% change`) |> 
+  mutate(`Colony ID` = str_replace(`Colony ID`, "ADIG", "D")) |> 
+  mutate(Species = 'A. digitifera')
+```
+
+### *A. millepora*
+
+Make a function to edit *A. millepora* data.
+
+```{r}
+C_individual_mig_f <- 
+  function(pre_path,
+           post_path,
+           species_id,
+           recode,
+           species){
+    mig_pre_df <- 
+      read_csv(pre_path) |> 
+      mutate(Replicate = rep(c(1,2),
+                             length.out = n()))
+    mig_post_df <- 
+      read_csv(post_path) |> 
+      mutate(Replicate = rep(c(1,2),
+                             length.out = n()))
+    mig_merged <- 
+      mig_pre_df |>
+        left_join(mig_post_df, 
+                  by = c('Colony ID',
+                         'Tank ID',
+                         'Treatment',
+                         'Replicate'),
+                  suffix = c(".pre", ".post"))
+    mig_compute <- 
+      mig_merged |> 
+        mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)|> 
+      filter(Treatment == 'Heat-stressed') |> 
+      select(`Colony ID`, `% change`) |> 
+      left_join(metadata |> rename(`Colony ID` = `Untransformed ID`) |> 
+                  select(2,4), 
+                by = 'Colony ID') |> 
+      relocate(1,3) |> 
+      select(!1) |> 
+      rename('Colony ID' = `Transformed ID2`) |> 
+      mutate(Species = 'A. millepora')
+  }
+```
+
+Import and edit.
+
+```{r}
+C_individual_mig_am_df <- 
+  C_individual_mig_f(pre_path = '../Raw/chap01_amil_mig_pre.csv',
+                     post_path = '../Raw/chap01_amil_mig_post.csv',
+                     species_id = 'AMIL',
+                     recode = 'M',
+                     species = 'A. millepora')
+```
+
+### *A. tenuis*
+
+Edit function for A. tenuis.
+
+```{r}
+C_individual_mig_f <- 
+  function(pre_path,
+           post_path,
+           species_id,
+           recode,
+           species){
+    mig_pre_df <- 
+      read_csv(pre_path) |> 
+      mutate(Replicate = rep(c(1,2),
+                             length.out = n()))
+    mig_post_df <- 
+      read_csv(post_path) |> 
+      mutate(Replicate = rep(c(1,2),
+                             length.out = n()))
+    mig_merged <- 
+      mig_pre_df |>
+        left_join(mig_post_df, 
+                  by = c('Colony ID',
+                         'Tank ID',
+                         'Treatment',
+                         'Replicate'),
+                  suffix = c(".pre", ".post"))
+    mig_compute <- 
+      mig_merged |> 
+        mutate('% change' = (`Normalized mean gray value.post` - `Normalized mean gray value.pre`)/`Normalized mean gray value.pre` * 100)|> 
+      filter(Treatment == 'Heat-stressed') |> 
+      select(`Colony ID`, `% change`) |> 
+      mutate(`Colony ID` = str_replace(`Colony ID`, species_id, recode)) |> 
+      mutate(Species = species)
+  }
+```
+
+Import and edit.
+
+```{r}
+C_individual_mig_at_df <- 
+  C_individual_mig_f(pre_path = '../Raw/chap01_aten_mig_pre.csv',
+                     post_path = '../Raw/chap01_aten_mig_post.csv',
+                     species_id = 'ATEN',
+                     recode = 'T',
+                     species = 'A. tenuis')
+```
+
+### Merge dataframes
+
+```{r}
+# Merge
+C_individual_mig_all_df <- 
+  bind_rows(C_individual_mig_ad_df,
+            C_individual_mig_am_df,
+            C_individual_mig_at_df)
+
+# Make a df that will allow you to reorder and rank colonies based on MIG change averages
+C_individual_mig_all_df <- 
+  C_individual_mig_all_df |> 
+  dplyr::group_by(`Colony ID`) |> 
+  drop_na() |> 
+  mutate(Mean = mean(`% change`)) |> 
+  ungroup()|>
+  filter(!`Colony ID` %in% str_replace(A1_mortality_unres_c, 'ATEN','T'))
+
+# Quick clean & ranking
+C_individual_mig_all_2_df <- 
+  C_individual_mig_all_df |> 
+  group_by(Species) |> 
+  arrange(Mean, .by_group = TRUE) |> 
+  distinct(`Colony ID`,.keep_all = T) |> 
+  mutate(Ranking  = seq_along(Species)) |>  # Remove unclassified Ts
+  mutate('Heat tolerance' = case_when(Species == 'A. digitifera' & Ranking <= 8 ~ 'High',
+                                      Species == 'A. digitifera' & Ranking >= 33 ~ 'Low',
+                                      Species == 'A. millepora' & Ranking <= 6 ~ 'High',
+                                      Species == 'A. millepora' & Ranking >= 25 ~ 'Low',
+                                      Species == 'A. tenuis' & Ranking <= 5 ~ 'High',
+                                      Species == 'A. tenuis' & Ranking >= 21 ~ 'Low',
+                                      .default = 'Intermediate'))
+```
+
+Export.
+
+```{r}
+write_csv(C_individual_mig_all_2_df,
+          '../Results/Tables/C_individual_mig_rank_df.csv')
+```
+
+### Plot
+
+```{r}
+C_individual_mig_all_p <- 
+  C_individual_mig_all_df |> 
+  left_join(C_individual_mig_all_2_df |> ungroup() |> select(1,6),
+            by = 'Colony ID') |> 
+  mutate(`Colony ID` = reorder_within(`Colony ID`, desc(Mean), Species)) |> 
+  ggplot(aes(x = `Colony ID`,
+             y = `% change`,
+             fill = `Heat tolerance`,
+             color = `Heat tolerance`)) + 
+  geom_quasirandom(size = 1,
+                   alpha = 0.25,
+                   method = "pseudorandom",
+                   width = 0.2) +
+  geom_hline(yintercept = 0,
+             linetype = 'dashed',
+             color = 'black',
+             linewidth = 0.25) +
+  stat_summary(fun = 'mean',
+               size = 0.5) +
+  facet_grid(cols = vars(Species),
+             scales = 'free',
+             space = 'free',
+             axes = 'all',
+             axis.labels = 'all') +
+  scale_fill_manual(values = color_htol_int_c) +
+  scale_color_manual(values = color_htol_int_c) +
+  scale_x_reordered() +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'))
+```
+
+Export.
+
+```{r}
+ggsave(plot = C_individual_mig_all_p,
+       filename = '../Results/Figures/individual-mig.png',
+       dpi = 900,
+       width = 25000, 
+       height = 3000, 
+       units = "px")
+```
+
+## D: Survival + MIG
+
+Make an additional dataset that combines proportion of fragments bleaching and MIG values to check possible changes in classification based on actual bleaching records and image analysis-derived data.
+
+Combine datasets.
+
+```{r}
+D_individual_mort.mig_df <- 
+  B_individual_mort_rank_df |> 
+  ungroup() |> 
+  select(Colony, `Proportion of fragments bleached, %`) |> 
+  rename('Colony ID' = Colony) |> 
+  left_join(C_individual_mig_all_2_df |> select(c(1,3,4))) |> 
+  relocate(Species)
+```
+
+Make a function for min-max normalization.
+
+```{r}
+D_indiv_mort.mig_minmax_norm_f <- 
+  function(x){
+    (x - min(x)) /(max(x) - min(x))
+  }
+```
+
+Normalize proportion of fragments bleached and MIG values.
+
+```{r}
+D_individual_mort.mig_std_df <- 
+  D_individual_mort.mig_df |> 
+  group_by(Species) |> 
+  mutate(`Proportion of fragments bleached, %` = D_indiv_mort.mig_minmax_norm_f(`Proportion of fragments bleached, %`),
+         Mean = D_indiv_mort.mig_minmax_norm_f(Mean),
+         Combined = `Proportion of fragments bleached, %` + Mean)
+```
+
+Rank colonies based on combined standardized values.
+
+```{r}
+D_individual_mort.mig_std_df <- 
+  D_individual_mort.mig_std_df |> 
+  group_by(Species) |> 
+  arrange(Combined, .by_group = TRUE) |> 
+  mutate(Ranking  = seq_along(Species)) |>
+  mutate('Heat tolerance' = case_when(Species == 'A. digitifera' & Ranking <= 8 ~ 'High',
+                                      Species == 'A. digitifera' & Ranking >= 33 ~ 'Low',
+                                      Species == 'A. millepora' & Ranking <= 6 ~ 'High',
+                                      Species == 'A. millepora' & Ranking >= 25 ~ 'Low',
+                                      Species == 'A. tenuis' & Ranking <= 5 ~ 'High',
+                                      Species == 'A. tenuis' & Ranking >= 21 ~ 'Low',
+                                      .default = 'Intermediate'))
+
+# Export
+D_individual_mort.mig_std_df |> 
+  write_csv('../Results/Tables/D_individual_mort.mig_rank_df.csv')
+```
+
+Plot.
+
+```{r}
+D_individual_mort.mig_std_p <- 
+  D_individual_mort.mig_std_df |> 
+  ggplot() +
+  geom_bar(aes(x = reorder(`Colony ID`, desc(Combined)),
+               y = `Proportion of fragments bleached, %`),
+           stat = 'identity',
+           alpha = 0.15) +
+  geom_point(aes(x = reorder(`Colony ID`, desc(Combined)),
+               y = Combined,
+               fill = `Heat tolerance`),
+           shape = 21,
+           color = 'white',
+           size = 4) +
+  geom_point(aes(x = reorder(`Colony ID`, desc(Combined)),
+                 y = Mean),
+             size = 1,
+             alpha = 0.15)  +
+  facet_grid(cols = vars(Species),
+             scales = 'free',
+             space = 'free',
+             axes = 'all',
+             axis.labels = 'all') +
+  scale_fill_manual(values = color_htol_int_c) +
+  scale_y_continuous(limits = c(0,2.1), 
+                     expand = expansion(0, 0)) +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'))
+```
+
+Export.
+
+```{r}
+ggsave(plot = D_individual_mort.mig_std_p,
+       filename = '../Results/Figures/individual-mort.mig.png',
+       dpi = 900,
+       width = 25000, 
+       height = 3000, 
+       units = "px")
+```
+
+Make plot and add stats for correlation between mortality and MIG (rationale for adding standardized values).
+
+```{r}
+D1_individual_mort.mig_p <- 
+  D_individual_mort.mig_df |> 
+  ggscatter(x = 'Proportion of fragments bleached, %',
+            y = 'Mean',
+            add = "reg.line",
+            conf.int = TRUE,
+            alpha = 0.5,
+            cor.method = 'spearman') +
+  stat_cor() +
+  labs(x = 'Proportion of  dead fragments (%)',
+       y = 'Mean % MIG change') +
+  facet_grid(cols = vars(Species),
+             scales = 'free',
+             space = 'free',
+             axes = 'all',
+             axis.labels = 'all') +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'))
+```
+
+Export.
+
+```{r}
+ggsave(plot = D1_individual_mort.mig_p,
+       filename = '../Results/Figures/individual-mort.mig-corr.png',
+       dpi = 900,
+       width = 10000, 
+       height = 4000, 
+       units = "px")
+```
+
+## E: k-means
+
+Make additional clustering metric to find support for the tolerance grouping based on phenotype ranking.
+
+### *A. digitifera*
+
+```{r}
+# Edit dataframe to get A. digitifera samples
+E_individual_kmean_ad_m <- 
+  D_individual_mort.mig_df |> 
+  filter(Species == 'A. digitifera') |>
+  select(!Species) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+E_individual_kmean_ad_wss <- 
+  fviz_nbclust(E_individual_kmean_ad_m,
+               kmeans,
+               method = "wss",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 2 (gap)
+E_individual_kmean_ad_gap <- 
+  fviz_nbclust(E_individual_kmean_ad_m, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 3 (sillhouette)
+E_individual_kmean_ad_sil <- 
+  fviz_nbclust(E_individual_kmean_ad_m, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Merge plots that check optimal # of clusters
+E_individual_kmean_ad_opt_p <- 
+  plot_grid(E_individual_kmean_ad_wss, 
+            E_individual_kmean_ad_gap, 
+            E_individual_kmean_ad_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+E_individual_kmean_ad_p <- 
+  E_individual_kmean_ad_m |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(E_individual_kmean_ad_m,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG',
+               xlab = 'Proportion of dead fragments (%)',
+               shape = 16) +
+  scale_fill_manual(values = rev(color_htol_c)) +
+  scale_color_manual(values = rev(color_htol_c)) +
+  coord_fixed() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none',
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Extract clusters
+E_individual_kmean_ad_df <- 
+  E_individual_kmean_ad_m |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 1, 
+                                 'Low', 
+                                 'High'))
+
+# Merge plots
+E_individual_kmean_ad_all_p <- 
+  plot_grid(E_individual_kmean_ad_p,
+            E_individual_kmean_ad_opt_p,
+            ncol = 2,
+            rel_widths = c(1,0.5))
+```
+
+Export.
+
+```{r}
+ggsave(E_individual_kmean_ad_all_p,
+       filename = '../Results/Figures/E_individual_kmean_ad_all_p.png',
+       dpi = 900,
+       width = 18000, 
+       height = 4000, 
+       units = "px")
+
+E_individual_kmean_ad_df |> 
+  write_csv('../Results/Tables/E_individual_kmean_ad_df.csv')
+```
+
+### *A. millepora*
+
+```{r}
+# Edit dataframe to get A. millepora samples
+E_individual_kmean_am_m <- 
+  D_individual_mort.mig_df |> 
+  filter(Species == 'A. millepora') |>
+  select(!Species) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+E_individual_kmean_am_wss <- 
+  fviz_nbclust(E_individual_kmean_am_m,
+               kmeans,
+               method = "wss",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 2 (gap)
+E_individual_kmean_am_gap <- 
+  fviz_nbclust(E_individual_kmean_am_m, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 3 (sillhouette)
+E_individual_kmean_am_sil <- 
+  fviz_nbclust(E_individual_kmean_am_m, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Merge plots that check optimal # of clusters
+E_individual_kmean_am_opt_p <- 
+  plot_grid(E_individual_kmean_am_wss, 
+            E_individual_kmean_am_gap, 
+            E_individual_kmean_am_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+E_individual_kmean_am_p <- 
+  E_individual_kmean_am_m |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(E_individual_kmean_am_m,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG',
+               xlab = 'Proportion of dead fragments (%)',
+               shape = 16) +
+  scale_fill_manual(values = rev(color_htol_c)) +
+  scale_color_manual(values = rev(color_htol_c)) +
+  coord_fixed() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none',
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Extract clusters
+E_individual_kmean_am_df <- 
+  E_individual_kmean_am_m |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 1, 
+                                 'Low', 
+                                 'High'))
+
+# Merge plots
+E_individual_kmean_am_all_p <- 
+  plot_grid(E_individual_kmean_am_p,
+            E_individual_kmean_am_opt_p,
+            ncol = 2,
+            rel_widths = c(1,0.5))
+```
+
+Export.
+
+```{r}
+ggsave(E_individual_kmean_am_all_p,
+       filename = '../Results/Figures/E_individual_kmean_am_all_p.png',
+       dpi = 900,
+       width = 18000, 
+       height = 4000, 
+       units = "px")
+
+E_individual_kmean_am_df |> 
+  write_csv('../Results/Tables/E_individual_kmean_am_df.csv')
+```
+
+### *A. tenuis*
+
+```{r}
+# Edit dataframe to get A. tenuis samples
+E_individual_kmean_at_m <- 
+  D_individual_mort.mig_df |> 
+  filter(Species == 'A. tenuis') |>
+  select(!Species) |> 
+  column_to_rownames('Colony ID') |> 
+  as.matrix()
+
+# Optimal cluster checking 1 (wss)
+E_individual_kmean_at_wss <- 
+  fviz_nbclust(E_individual_kmean_at_m,
+               kmeans,
+               method = "wss",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 2 (gap)
+E_individual_kmean_at_gap <- 
+  fviz_nbclust(E_individual_kmean_at_m, 
+               kmeans, 
+               method = "gap",  
+               nboot=200, 
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Optimal cluster checking 3 (sillhouette)
+E_individual_kmean_at_sil <- 
+  fviz_nbclust(E_individual_kmean_at_m, 
+               kmeans, 
+               method = "silhouette",  
+               k.max = 10,
+               linecolor = 'black') +
+  theme(plot.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Merge plots that check optimal # of clusters
+E_individual_kmean_at_opt_p <- 
+  plot_grid(E_individual_kmean_at_wss, 
+            E_individual_kmean_at_gap, 
+            E_individual_kmean_at_sil,
+            nrow = 1)
+
+# Make a plot that shows clusters
+E_individual_kmean_at_p <- 
+  E_individual_kmean_at_m |> 
+  kmeans(centers = 2) |> 
+  fviz_cluster(E_individual_kmean_at_m,
+               labelsize = 8,
+               repel = T,
+               ylab = '% change in MIG',
+               xlab = 'Proportion of dead fragments (%)',
+               shape = 16) +
+  scale_fill_manual(values = rev(color_htol_c)) +
+  scale_color_manual(values = rev(color_htol_c)) +
+  coord_fixed() +
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.position = 'none',
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25))
+
+# Extract clusters
+E_individual_kmean_at_df <- 
+  E_individual_kmean_at_m |> 
+  kmeans(centers = 2) %>%
+  .$cluster |> 
+  as.data.frame() |> 
+  rownames_to_column() |> 
+  rename(ColonyID = 1, 
+         Cluster = 2) |> 
+  mutate(HeatTolerance = if_else(Cluster == 1, 
+                                 'Low', 
+                                 'High'))
+
+# Merge plots
+E_individual_kmean_at_all_p <- 
+  plot_grid(E_individual_kmean_at_p,
+            E_individual_kmean_at_opt_p,
+            ncol = 2,
+            rel_widths = c(1,0.5))
+```
+
+Export.
+
+```{r}
+ggsave(E_individual_kmean_at_all_p,
+       filename = '../Results/Figures/E_individual_kmean_at_all_p.png',
+       dpi = 900,
+       width = 18000, 
+       height = 4000, 
+       units = "px")
+
+E_individual_kmean_at_df |> 
+  write_csv('../Results/Tables/E_individual_kmean_at_df.csv')
+```
+
+### Merge dataframes
+
+```{r}
+E_individual_kmean_merged_df <- 
+  bind_rows(E_individual_kmean_ad_df,
+            E_individual_kmean_am_df,
+            E_individual_kmean_at_df) |> 
+  mutate(Species = case_when(str_detect(ColonyID, 'D') ~ 'A. digitifera',
+                             str_detect(ColonyID, 'M') ~ 'A. millepora',
+                             str_detect(ColonyID, 'T') ~ 'A. tenuis',
+                             .default = NA)) |> 
+  group_by(Species) |> 
+  arrange(HeatTolerance,
+          .by_group = T)
+
+E_individual_kmean_merged_df |> 
+  write_csv('../Results/Tables/E_individual_kmean_merged_df.csv')
+```
+
+## F: Collate rankings
+
+```{r}
+F_individual_coll_htol_df <- 
+  B_individual_mort_rank_df |> 
+  ungroup() |> 
+  select(c(1,5,11,12,13)) |> 
+  rename('Percent dead' = 3,
+         'Survival-based ranking' = 4,
+         'Survival-based heat tolerance' = 5) |> 
+  left_join(C_individual_mig_all_2_df |> 
+              select(3,1,4,5,6) |> 
+              rename('Colony' = 2,
+                     'Percent MIG change' = 3,
+                     'MIG-based ranking' = 4,
+                     'MIG-based heat tolerance' = 5)) |> 
+  left_join(D_individual_mort.mig_std_df |> 
+              select(1,2,5,6,7) |> 
+              rename('Colony' = 2,
+                     'Combined survival and MIG' = 3,
+                     'Survival+MIG-based ranking' = 4,
+                     'Survival+MIG-based heat tolerance' = 5)) |> 
+  left_join(E_individual_kmean_merged_df |> 
+              select(4,1,2,3) |> 
+              rename('Colony' = 2,
+                     'Kmeans cluster' = 3,
+                     'Kmeans-based heat tolerance' = 4))
+```
+
+Export.
+
+```{r}
+F_individual_coll_htol_df |> 
+  write_csv('../Results/Tables/F_individual_coll_htol_df.csv')
+```
