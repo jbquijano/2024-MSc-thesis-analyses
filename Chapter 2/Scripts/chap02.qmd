@@ -1,0 +1,327 @@
+---
+title: "Chapter 2"
+format: html
+theme: 
+  light: zephyr
+  dark: cyborg
+toc: true
+page-layout: full
+number-sections: true
+number-depth: 3
+editor: visual
+self-contained: true
+---
+
+# Load libraries
+
+```{r}
+pacman::p_load(tidyverse,
+               janitor,
+               vegan,
+               ggord,
+               ape)
+```
+
+# A: Import data
+
+Make color palettes.
+
+```{r}
+color_species_c <- c("#294557","#558981","#C6BF88")
+color_htol_c <- c("#B2182B", "#2166AC")
+color_htol_int_c <- c("#B2182B","gray", "#2166AC")
+```
+
+Make a vector that contains colony IDs that had unresolved heat tolerance.
+
+```{r}
+A_unres_c <- c("ATEN07","ATEN08","ATEN09","ATEN24","ATEN25")
+```
+
+Import Symbiodiniaceae post-MED sequence data.
+
+```{r}
+#| warning: false
+A_symb_its2_df <- 
+  read_tsv('../Raw/chap02_symportal_230426/post_med_seqs/260_20230428T204810_DBV_20230429T025601.seqs.absolute.abund_and_meta.txt') |> 
+  drop_na() |> # remove rows with NA values
+  filter(!sample_name %in% A_unres_c) |> 
+  select(2,40:last_col()) |> 
+  rename(Colony = 1) |> 
+  mutate(Species = case_when(str_detect(Colony, 'ATEN') ~ 'A. tenuis',
+                            str_detect(Colony, 'AMIL') ~ 'A. millepora',
+                            .default = 'A. digitifera')) |> 
+  mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
+                            Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
+                            Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
+                            .default = Colony)) |> 
+  relocate(last_col()) |> 
+  type_convert()
+```
+
+Import Symbiodiniaceae predicted ITS2 profiles.
+
+```{r}
+#| warning: false
+A_symb_prof_df <- 
+  read_tsv('../Raw/chap02_symportal_230426/its2_type_profiles/its2_profiles_copy.txt') |> 
+  row_to_names(6) |>
+  drop_na() |> 
+  rename(Colony = 2) |> 
+  filter(!Colony %in% A_unres_c) |> 
+  select(!1) |> 
+  mutate(Species = case_when(str_detect(Colony, 'ATEN') ~ 'A. tenuis',
+                            str_detect(Colony, 'AMIL') ~ 'A. millepora',
+                            .default = 'A. digitifera')) |> 
+  mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
+                            Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
+                            Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
+                            .default = Colony)) |> 
+  relocate(last_col()) |> 
+  type_convert()
+```
+
+Import heat tolerance data.
+
+```{r}
+#| warning: false
+
+A_symb_htol_df <- 
+  read_csv('../Raw/chap01/F_individual_coll_htol_df.csv') |> 
+  rename('mor'=5, 
+         'mig'=8, 
+         'mor.mig'=11, 
+         'kmeans'=13)
+```
+
+# B: Beta diversity
+
+## dbRDA
+
+Merge ITS2 sequence data and heat tolerance metadata.
+
+```{r}
+B_beta_its2_df <- 
+  A_symb_its2_df |> 
+  column_to_rownames('Colony') |> 
+  select(!1)
+
+B_beta_htol_df <- 
+  A_symb_htol_df |> 
+  column_to_rownames('Colony') |> 
+  select_if((is.numeric)) |> 
+  rename('mor' = 1, 
+         'mig' = 3,
+         'mor.mig' = 5)
+```
+
+Do dbRDA.
+
+```{r}
+#| warning: false
+B_beta_its2_dbrda <- 
+  dbrda(B_beta_its2_df ~ mor + 
+          mig + 
+          `mor.mig`,
+        data = B_beta_htol_df,
+        distance = "bray")
+
+B_beta_its2_dbrda_p <-
+  ggord(B_beta_its2_dbrda, A_symb_htol_df$Species,
+      arrow = 0.15, 
+      col = color_species_c,
+      size = 3, 
+      txt = 3,
+      repel = T,
+      hull = F,
+      ellipse = F,
+      alpha = 0.75) +
+  geom_hline(yintercept = 0,
+             color = 'gray',
+             linewidth = 0.5,
+             alpha = 0.5) +
+  geom_vline(xintercept = 0,
+             color = 'gray',
+             linewidth = 0.5,
+             alpha = 0.5) +
+  scale_y_continuous(limits = c(-0.8, 1.25),
+                     expand = c(0,0)) +
+  scale_x_continuous(limits = c(-0.75, 1.25),
+                     expand = c(0,0)) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'))
+```
+
+## PCoA
+
+Compute Bray-Curtis dissimilarity.
+
+```{r}
+B_beta_its2_bc <- 
+  vegdist(B_beta_its2_df)
+```
+
+Do PCoA.
+
+```{r}
+B_beta_pcoa_df_f <- 
+  function(distance){
+    vectors <- 
+      distance |>
+      cmdscale(eig = T) |> 
+      pluck('points') |> 
+      as.data.frame() |> 
+      rownames_to_column() |> 
+      rename(Colony = 1)
+  }
+
+B_beta_pcoa_eig_df_f <- 
+  function(distance){
+    rel_eig <- 
+      distance |>
+      cmdscale(eig = T) |> 
+      pluck('eig') |> 
+      as.data.frame() |> 
+      rename(eig = 1) |> 
+      mutate(rel_eig = eig/sum(eig) * 100) |>
+      pull(rel_eig)
+  }
+```
+
+Extract PCoA data.
+
+```{r}
+B_beta_its2_pcoa_df <- 
+  B_beta_its2_bc |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df)
+```
+
+Make a function for a customized PCoA plot.
+
+```{r}
+B_beta_its2_pcoa_f <- 
+  function(df, basis){
+    df |> 
+      ggplot(aes(x = V1,
+                 y = V2,
+                 color = {{basis}})) +
+      geom_hline(yintercept = 0,
+                 color = 'gray',
+                 linewidth = 0.5) +
+      geom_vline(xintercept = 0,
+                 color = 'gray',
+                 linewidth = 0.5) +
+      geom_point(size = 3,
+                 alpha = 0.75) +
+      facet_grid(cols = vars(Species),
+                 scales = 'free',
+                 axes = 'all')  +
+      theme(panel.grid = element_blank(),
+            strip.background = element_blank(),
+            axis.line = element_line(),
+            panel.background = element_rect(fill = '#F5F5F5'),
+            panel.grid.major.y = element_line(colour = 'white',
+                                              linewidth = 0.75),
+            panel.grid.minor.y = element_line(colour = 'white',
+                                              linewidth = 0.25),
+            panel.grid.major.x = element_line(colour = 'white',
+                                              linewidth = 0.75),
+            panel.grid.minor.x = element_line(colour = 'white',
+                                              linewidth = 0.25),
+            strip.text = element_text(face = 'italic'))
+  }
+```
+
+### Mortality-based
+
+```{r}
+B_beta_its2_mor_p <- 
+  B_beta_its2_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCoA1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+                  '%)'),
+       y = paste0('PCoA2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance')
+```
+
+### MIG-based
+
+```{r}
+B_beta_its2_mig_p <- 
+  B_beta_its2_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCoA1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+                  '%)'),
+       y = paste0('PCoA2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance')
+```
+
+### Mortality+MIG-based
+
+```{r}
+B_beta_its2_mor.mig_p <- 
+  B_beta_its2_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCoA1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+                  '%)'),
+       y = paste0('PCoA2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance')
+```
+
+### Kmeans-based
+
+```{r}
+B_beta_its2_kmeans_p <- 
+  B_beta_its2_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCoA1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+                  '%)'),
+       y = paste0('PCoA2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance')
+```
+
+## PERMANOVA
+
+```{r}
+B_beta_its2_pcoa_df |> ggplot(aes(x = V1,
+           y = V2,
+           color = mig)) +
+    geom_hline(yintercept = 0,
+               color = 'gray',
+               linewidth = 0.5) +
+    geom_vline(xintercept = 0,
+               color = 'gray',
+               linewidth = 0.5) +
+    geom_point(size = 3,
+               alpha = 0.75)
+```

@@ -32,6 +32,7 @@ pacman::p_load(tidyverse,
 Import metadata.
 
 ```{r}
+#| warning: false 
 metadata <- 
   read_csv('../Raw/chap01_metadata.csv')
 ```
@@ -187,6 +188,7 @@ A_mortality_all_df <-
 Export shaped tibble.
 
 ```{r}
+#| eval: false
 write_csv(A_mortality_all_df,
           file = '../Results/Tables/A_mortality_all_km_df.csv')
 ```
@@ -212,8 +214,12 @@ A_mortality_all_km_p <-
 Export plot.
 
 ```{r}
+#| echo: false
 A_mortality_all_km_p
+```
 
+```{r}
+#| eval: false
 ggsave('../Results/Figures/kaplan-meier.png',
        dpi = 900,
        width = 7000, 
@@ -227,8 +233,12 @@ Make a global log-rank test.
 A_mortality_km_glob_s <- 
   surv_pvalue(A_mortality_all_km,
               data = A_mortality_all_df)
+```
 
-# Export
+Export.
+
+```{r}
+#| eval: false
 write_csv(A_mortality_km_glob_s,
           '../Results/Tables/A_mortality_km_glob_s.csv')
 ```
@@ -241,8 +251,12 @@ A_mortality_km_pair_s <-
                     data = A_mortality_all_df,
                     p.adjust.method = 'BH') |> 
   tidy()
+```
 
-# Export
+Exrport.
+
+```{r}
+#| eval: false
 write_csv(A_mortality_km_pair_s,
           '../Results/Tables/A_mortality_km_pair_s.csv')
 ```
@@ -269,7 +283,7 @@ B_individual_mort_df <-
   mutate('Proportion of fragments bleached, %' = 100 - `% fragments healthy`)
 ```
 
-Rank and export data.
+Rank.
 
 ```{r}
 B_individual_mort_rank_df <- 
@@ -278,7 +292,12 @@ B_individual_mort_rank_df <-
   arrange(`Proportion of fragments bleached, %`, .by_group = TRUE) |> 
   mutate(Ranking  = seq_along(Species),
          'Heat tolerance' = ifelse(`Proportion of fragments bleached, %` >= 50, "Low", "High")) 
+```
 
+Export.
+
+```{r}
+#| eval: false
 B_individual_mort_rank_df |> 
   write_csv('../Results/Tables/B_individual_mort_rank_df.csv')
 ```
@@ -325,9 +344,15 @@ B_individual_mort_all_p <-
   B_individual_mort_f()
 ```
 
+```{r}
+#| echo: false
+B_individual_mort_all_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(plot = B_individual_mort_all_p,
        filename = '../Results/Figures/individual-mort.png',
        dpi = 900,
@@ -343,6 +368,7 @@ ggsave(plot = B_individual_mort_all_p,
 Import pre-exposure MIG data.
 
 ```{r}
+#| warning: false 
 C_individual_mig_ad_pre_df <- 
   read_csv('../Raw/chap01_adig_mig_pre.csv') |> 
   mutate(Replicate = rep(c(1,2),
@@ -352,6 +378,7 @@ C_individual_mig_ad_pre_df <-
 Import post-exposure MIG data.
 
 ```{r}
+#| warning: false 
 C_individual_mig_ad_post_df <- 
   read_csv('../Raw/chap01_adig_mig_post.csv') |> 
   mutate(Replicate = rep(c(1,2),
@@ -433,6 +460,7 @@ C_individual_mig_f <-
 Import and edit.
 
 ```{r}
+#| warning: false 
 C_individual_mig_am_df <- 
   C_individual_mig_f(pre_path = '../Raw/chap01_amil_mig_pre.csv',
                      post_path = '../Raw/chap01_amil_mig_post.csv',
@@ -481,6 +509,7 @@ C_individual_mig_f <-
 Import and edit.
 
 ```{r}
+#| warning: false 
 C_individual_mig_at_df <- 
   C_individual_mig_f(pre_path = '../Raw/chap01_aten_mig_pre.csv',
                      post_path = '../Raw/chap01_aten_mig_post.csv',
@@ -526,6 +555,7 @@ C_individual_mig_all_2_df <-
 Export.
 
 ```{r}
+#| eval: false
 write_csv(C_individual_mig_all_2_df,
           '../Results/Tables/C_individual_mig_rank_df.csv')
 ```
@@ -533,6 +563,7 @@ write_csv(C_individual_mig_all_2_df,
 ### Plot
 
 ```{r}
+#| warning: false 
 C_individual_mig_all_p <- 
   C_individual_mig_all_df |> 
   left_join(C_individual_mig_all_2_df |> ungroup() |> select(1,6),
@@ -572,9 +603,15 @@ C_individual_mig_all_p <-
         strip.text = element_text(face = 'italic'))
 ```
 
+```{r}
+#| echo: false
+C_individual_mig_all_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(plot = C_individual_mig_all_p,
        filename = '../Results/Figures/individual-mig.png',
        dpi = 900,
@@ -680,9 +717,15 @@ D_individual_mort.mig_std_p <-
         strip.text = element_text(face = 'italic'))
 ```
 
+```{r}
+#| echo: false
+D_individual_mort.mig_std_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(plot = D_individual_mort.mig_std_p,
        filename = '../Results/Figures/individual-mort.mig.png',
        dpi = 900,
@@ -721,9 +764,15 @@ D1_individual_mort.mig_p <-
         strip.text = element_text(face = 'italic'))
 ```
 
+```{r}
+#| echo: false
+D1_individual_mort.mig_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(plot = D1_individual_mort.mig_p,
        filename = '../Results/Figures/individual-mort.mig-corr.png',
        dpi = 900,
@@ -855,9 +904,15 @@ E_individual_kmean_ad_all_p <-
             rel_widths = c(1,0.5))
 ```
 
+```{r}
+#| echo: false
+E_individual_kmean_ad_all_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(E_individual_kmean_ad_all_p,
        filename = '../Results/Figures/E_individual_kmean_ad_all_p.png',
        dpi = 900,
@@ -976,9 +1031,12 @@ E_individual_kmean_am_df <-
   rownames_to_column() |> 
   rename(ColonyID = 1, 
          Cluster = 2) |> 
-  mutate(HeatTolerance = if_else(Cluster == 1, 
-                                 'Low', 
-                                 'High'))
+  mutate(Cluster = if_else(Cluster == 2, 
+                                 1, 
+                                 2)) |> 
+  mutate(HeatTolerance = if_else(Cluster == 2, 
+                                 'High', 
+                                 'Low')) 
 
 # Merge plots
 E_individual_kmean_am_all_p <- 
@@ -988,9 +1046,15 @@ E_individual_kmean_am_all_p <-
             rel_widths = c(1,0.5))
 ```
 
+```{r}
+#| echo: false
+E_individual_kmean_am_all_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(E_individual_kmean_am_all_p,
        filename = '../Results/Figures/E_individual_kmean_am_all_p.png',
        dpi = 900,
@@ -1109,9 +1173,12 @@ E_individual_kmean_at_df <-
   rownames_to_column() |> 
   rename(ColonyID = 1, 
          Cluster = 2) |> 
-  mutate(HeatTolerance = if_else(Cluster == 1, 
-                                 'Low', 
-                                 'High'))
+  mutate(Cluster = if_else(Cluster == 2, 
+                                 1, 
+                                 2)) |> 
+  mutate(HeatTolerance = if_else(Cluster == 2, 
+                                 'High', 
+                                 'Low')) 
 
 # Merge plots
 E_individual_kmean_at_all_p <- 
@@ -1121,9 +1188,15 @@ E_individual_kmean_at_all_p <-
             rel_widths = c(1,0.5))
 ```
 
+```{r}
+#| echo: false
+E_individual_kmean_at_all_p
+```
+
 Export.
 
 ```{r}
+#| eval: false
 ggsave(E_individual_kmean_at_all_p,
        filename = '../Results/Figures/E_individual_kmean_at_all_p.png',
        dpi = 900,
@@ -1149,7 +1222,12 @@ E_individual_kmean_merged_df <-
   group_by(Species) |> 
   arrange(HeatTolerance,
           .by_group = T)
+```
 
+Export.
+
+```{r}
+#| eval: false
 E_individual_kmean_merged_df |> 
   write_csv('../Results/Tables/E_individual_kmean_merged_df.csv')
 ```
@@ -1186,6 +1264,7 @@ F_individual_coll_htol_df <-
 Export.
 
 ```{r}
+#| eval: false
 F_individual_coll_htol_df |> 
   write_csv('../Results/Tables/F_individual_coll_htol_df.csv')
 ```
