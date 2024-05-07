@@ -19,7 +19,9 @@ pacman::p_load(tidyverse,
                janitor,
                vegan,
                ggord,
-               ape)
+               ape,
+               cowplot,
+               pairwiseAdonis)
 ```
 
 # A: Import data
@@ -42,7 +44,28 @@ Import Symbiodiniaceae post-MED sequence data.
 
 ```{r}
 #| warning: false
+
+# Filtered ITS2 sequences (without D)
 A_symb_its2_df <- 
+  read_tsv('../Raw/chap02_symportal_230426/post_med_seqs/260_20230428T204810_DBV_20230429T025601.seqs.absolute.abund_and_meta.txt') |> 
+  drop_na() |> # remove rows with NA values
+  filter(!sample_name %in% A_unres_c) |> 
+  select(2,40:last_col()) |> 
+  rename(Colony = 1) |> 
+  mutate(Species = case_when(str_detect(Colony, 'ATEN') ~ 'A. tenuis',
+                            str_detect(Colony, 'AMIL') ~ 'A. millepora',
+                            .default = 'A. digitifera')) |> 
+  mutate(Colony = case_when(Species == 'A. digitifera' ~ paste0('D', str_sub(Colony,5,6)),
+                            Species =='A. tenuis' ~ paste0('T', str_sub(Colony,5,6)),
+                            Species == 'A. millepora' ~ paste0('M', str_sub(Colony,5,6)),
+                            .default = Colony)) |> 
+  relocate(last_col()) |> 
+  select(!starts_with("D", ignore.case = F)) |> # Remove D sequences (they are negligible)
+  select(!ends_with("D", ignore.case = F)) |> # Remove D sequences (they are negligible)
+  type_convert()
+
+# Unfiltered ITS2 sequences
+A_symb_its2_all_df <- 
   read_tsv('../Raw/chap02_symportal_230426/post_med_seqs/260_20230428T204810_DBV_20230429T025601.seqs.absolute.abund_and_meta.txt') |> 
   drop_na() |> # remove rows with NA values
   filter(!sample_name %in% A_unres_c) |> 
@@ -98,7 +121,9 @@ A_symb_htol_df <-
 
 ## dbRDA
 
-Merge ITS2 sequence data and heat tolerance metadata.
+### BC
+
+Get ITS2 sequence data and heat tolerance metadata.
 
 ```{r}
 B_beta_its2_df <- 
@@ -128,14 +153,14 @@ B_beta_its2_dbrda <-
 
 B_beta_its2_dbrda_p <-
   ggord(B_beta_its2_dbrda, A_symb_htol_df$Species,
-      arrow = 0.15, 
-      col = color_species_c,
-      size = 3, 
-      txt = 3,
-      repel = T,
-      hull = F,
-      ellipse = F,
-      alpha = 0.75) +
+        arrow = 0.15, 
+        col = color_species_c,
+        size = 3, 
+        txt = 3,
+        repel = T,
+        hull = F,
+        ellipse = F,
+        alpha = 0.75) +
   geom_hline(yintercept = 0,
              color = 'gray',
              linewidth = 0.5,
@@ -144,13 +169,14 @@ B_beta_its2_dbrda_p <-
              color = 'gray',
              linewidth = 0.5,
              alpha = 0.5) +
+  labs(x = 'dbRDA1 (95.08%)',
+       y = 'dbRDA2 (3.21%)') +
   scale_y_continuous(limits = c(-0.8, 1.25),
                      expand = c(0,0)) +
   scale_x_continuous(limits = c(-0.75, 1.25),
                      expand = c(0,0)) +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title.x = element_blank(),
         strip.background = element_blank(),
         axis.line = element_line(),
         panel.background = element_rect(fill = '#F5F5F5'),
@@ -165,16 +191,141 @@ B_beta_its2_dbrda_p <-
         strip.text = element_text(face = 'italic'))
 ```
 
-## PCoA
+Manually export the dbRDA results above.
+
+Export plot.
+
+```{r}
+ggsave(plot = B_beta_its2_dbrda_p,
+       filename = '../Results/Figures/B_beta_its2_dbrda.png',
+       dpi = 900,
+       width = 6500, 
+       height = 3500, 
+       units = "px")
+```
+
+### wUni
+
+Clean weighted Unifrac distance matrix and heat tolerance metadata.
+
+```{r}
+B_beta_wuni_its2_d <- 
+  C_beta_wuni_df |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+
+B_beta_wuni_htol_df <- 
+  A_symb_htol_df |> 
+  column_to_rownames('Colony') |> 
+  select_if((is.numeric)) |> 
+  rename('mor' = 1, 
+         'mig' = 3,
+         'mor.mig' = 5)
+```
+
+Do dbRDA.
+
+```{r}
+#| warning: false
+B_beta_wuni_its2_dbrda <- 
+  dbrda(B_beta_wuni_its2_d ~ mor + 
+          mig + 
+          `mor.mig`,
+        data = B_beta_wuni_htol_df)
+
+B_beta_wuni_its2_dbrda_p <-
+  ggord(B_beta_wuni_its2_dbrda, 
+        A_symb_htol_df$Species,
+        arrow = 0.15, 
+        col = color_species_c,
+        size = 3, 
+        txt = 3,
+        repel = T,
+        hull = F,
+        ellipse = F,
+        alpha = 0.75) +
+  geom_hline(yintercept = 0,
+             color = 'gray',
+             linewidth = 0.5,
+             alpha = 0.5) +
+  geom_vline(xintercept = 0,
+             color = 'gray',
+             linewidth = 0.5,
+             alpha = 0.5) +
+  labs(x = 'dbRDA1 (99.61%)',
+       y = 'dbRDA2 (0.31%)') +
+  scale_y_continuous(limits = c(-2, 2),
+                     expand = c(0,0)) +
+  scale_x_continuous(limits = c(-2, 2),
+                     expand = c(0,0)) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'))
+```
+
+Manually export the dbRDA results above.
+
+Export plot.
+
+```{r}
+ggsave(plot = B_beta_wuni_its2_dbrda_p,
+       filename = '../Results/Figures/B_beta_wuni_its2_dbrda.png',
+       dpi = 900,
+       width = 6500, 
+       height = 3500, 
+       units = "px")
+```
+
+## PCoA (BC)
+
+Make a function that separately makes distance per species.
+
+```{r}
+B_beta_its2_bc_f <-
+  function(df, species){
+    df |> 
+      column_to_rownames('Colony') |> 
+      filter(Species == species) |> 
+      select(!1) |> 
+      vegdist()
+  }
+```
 
 Compute Bray-Curtis dissimilarity.
 
+*A. digitifera*
+
 ```{r}
-B_beta_its2_bc <- 
-  vegdist(B_beta_its2_df)
+B_beta_its2_ad_bc <- 
+  B_beta_its2_bc_f(A_symb_its2_df, 'A. digitifera')
 ```
 
-Do PCoA.
+*A. millepora*
+
+```{r}
+B_beta_its2_am_bc <- 
+  B_beta_its2_bc_f(A_symb_its2_df, 'A. millepora')
+```
+
+*A. tenuis*
+
+```{r}
+B_beta_its2_at_bc <- 
+  B_beta_its2_bc_f(A_symb_its2_df, 'A. tenuis')
+```
+
+Make a function for computing PCoA (and getting relative contribution of the PCo).
 
 ```{r}
 B_beta_pcoa_df_f <- 
@@ -204,10 +355,26 @@ B_beta_pcoa_eig_df_f <-
 Extract PCoA data.
 
 ```{r}
-B_beta_its2_pcoa_df <- 
-  B_beta_its2_bc |> 
+# A. digitifera.
+B_beta_its2_ad_pcoa_df <- 
+  B_beta_its2_ad_bc |> 
   B_beta_pcoa_df_f() |> 
-  left_join(A_symb_htol_df)
+  left_join(A_symb_htol_df |> 
+              filter(Species == 'A. digitifera'))
+
+# A. millepora
+B_beta_its2_am_pcoa_df <- 
+  B_beta_its2_am_bc |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df |> 
+              filter(Species == 'A. millepora'))
+
+# A. tenuis
+B_beta_its2_at_pcoa_df <- 
+  B_beta_its2_at_bc |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df |> 
+              filter(Species == 'A. tenuis'))
 ```
 
 Make a function for a customized PCoA plot.
@@ -226,10 +393,7 @@ B_beta_its2_pcoa_f <-
                  color = 'gray',
                  linewidth = 0.5) +
       geom_point(size = 3,
-                 alpha = 0.75) +
-      facet_grid(cols = vars(Species),
-                 scales = 'free',
-                 axes = 'all')  +
+                 alpha = 0.75)  +
       theme(panel.grid = element_blank(),
             strip.background = element_blank(),
             axis.line = element_line(),
@@ -249,79 +413,1310 @@ B_beta_its2_pcoa_f <-
 ### Mortality-based
 
 ```{r}
-B_beta_its2_mor_p <- 
-  B_beta_its2_pcoa_df |> 
+# A. digitifera
+B_beta_its2_ad_mor_p <- 
+  B_beta_its2_ad_pcoa_df |> 
   B_beta_its2_pcoa_f(mor) +
   scale_color_manual(values = color_htol_c) +
-  labs(x = paste0('PCoA1 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[1],2),
                   '%)'),
-       y = paste0('PCoA2 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[2],2),
                   '%)'),
-       color = 'Heat tolerance')
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+B_beta_its2_am_mor_p <- 
+  B_beta_its2_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  format(round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[1],2), nsmall = 2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+B_beta_its2_at_mor_p <- 
+  B_beta_its2_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+B_beta_its2_mor_p <- 
+  plot_grid(nrow = 1,
+            B_beta_its2_ad_mor_p,
+            B_beta_its2_am_mor_p,
+            B_beta_its2_at_mor_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = B_beta_its2_mor_p,
+       filename = '../Results/Figures/B_beta_bc_its2_mor.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
 ```
 
 ### MIG-based
 
 ```{r}
-B_beta_its2_mig_p <- 
-  B_beta_its2_pcoa_df |> 
+# A. digitifera
+B_beta_its2_ad_mig_p <- 
+  B_beta_its2_ad_pcoa_df |> 
   B_beta_its2_pcoa_f(mig) +
   scale_color_manual(values = color_htol_int_c) +
-  labs(x = paste0('PCoA1 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[1],2),
                   '%)'),
-       y = paste0('PCoA2 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[2],2),
                   '%)'),
-       color = 'Heat tolerance')
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+B_beta_its2_am_mig_p <- 
+  B_beta_its2_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  format(round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[1],2), nsmall = 2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+B_beta_its2_at_mig_p <- 
+  B_beta_its2_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+B_beta_its2_mig_p <- 
+  plot_grid(nrow = 1,
+            B_beta_its2_ad_mig_p,
+            B_beta_its2_am_mig_p,
+            B_beta_its2_at_mig_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = B_beta_its2_mig_p,
+       filename = '../Results/Figures/B_beta_bc_its2_mig.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500,
+       units = "px")
 ```
 
 ### Mortality+MIG-based
 
 ```{r}
-B_beta_its2_mor.mig_p <- 
-  B_beta_its2_pcoa_df |> 
+# A. digitifera
+B_beta_its2_ad_mor.mig_p <- 
+  B_beta_its2_ad_pcoa_df |> 
   B_beta_its2_pcoa_f(mor.mig) +
   scale_color_manual(values = color_htol_int_c) +
-  labs(x = paste0('PCoA1 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[1],2),
                   '%)'),
-       y = paste0('PCoA2 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[2],2),
                   '%)'),
-       color = 'Heat tolerance')
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+B_beta_its2_am_mor.mig_p <- 
+  B_beta_its2_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  format(round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[1],2), nsmall = 2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+B_beta_its2_at_mor.mig_p <- 
+  B_beta_its2_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+B_beta_its2_mor.mig_p <- 
+  plot_grid(nrow = 1,
+            B_beta_its2_ad_mor.mig_p,
+            B_beta_its2_am_mor.mig_p,
+            B_beta_its2_at_mor.mig_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = B_beta_its2_mor.mig_p,
+       filename = '../Results/Figures/B_beta_bc_its2_mor.mig.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
 ```
 
 ### Kmeans-based
 
 ```{r}
-B_beta_its2_kmeans_p <- 
-  B_beta_its2_pcoa_df |> 
+# A. digitifera
+B_beta_its2_ad_kmeans_p <- 
+  B_beta_its2_ad_pcoa_df |> 
   B_beta_its2_pcoa_f(kmeans) +
   scale_color_manual(values = color_htol_c) +
-  labs(x = paste0('PCoA1 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[1],2),
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[1],2),
                   '%)'),
-       y = paste0('PCoA2 (', 
-                  round(B_beta_pcoa_eig_df_f(B_beta_its2_bc)[2],2),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_ad_bc)[2],2),
                   '%)'),
-       color = 'Heat tolerance')
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+B_beta_its2_am_kmeans_p <- 
+  B_beta_its2_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  format(round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[1],2), nsmall = 2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_am_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+B_beta_its2_at_kmeans_p <- 
+  B_beta_its2_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(B_beta_its2_at_bc)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+B_beta_its2_kmeans_p <- 
+  plot_grid(nrow = 1,
+            B_beta_its2_ad_kmeans_p,
+            B_beta_its2_am_kmeans_p,
+            B_beta_its2_at_kmeans_p)
 ```
 
-## PERMANOVA
+Export.
 
 ```{r}
-B_beta_its2_pcoa_df |> ggplot(aes(x = V1,
-           y = V2,
-           color = mig)) +
-    geom_hline(yintercept = 0,
-               color = 'gray',
-               linewidth = 0.5) +
-    geom_vline(xintercept = 0,
-               color = 'gray',
-               linewidth = 0.5) +
-    geom_point(size = 3,
-               alpha = 0.75)
+ggsave(plot = B_beta_its2_kmeans_p,
+       filename = '../Results/Figures/B_beta_bc_its2_kmeans.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
+```
+
+## C: PCoA (wUni)
+
+Import weighted Unifrac distance matrix computed by Symportal.
+
+```{r}
+C_beta_wuni_m <- 
+  read_tsv('../Raw/chap02_symportal_230426/between_sample_distances/C/20230429T025601_unifrac_sample_distances_C_no_sqrt.dist',col_names = F) |> 
+  select(!2)
+```
+
+Clean matrix.
+
+```{r}
+column_names <- 
+  C_beta_wuni_m |> 
+  pull(1) %>%
+  c('Colony',.)
+
+C_beta_wuni_df <- 
+  read_tsv('../Raw/chap02_symportal_230426/between_sample_distances/C/20230429T025601_unifrac_sample_distances_C_no_sqrt.dist',col_names = F) |> 
+  select(!2) |> 
+  `colnames<-`(column_names) |> 
+  filter(!Colony %in% A_unres_c) |> 
+  select(!all_of(A_unres_c))
+```
+
+Rename colony IDs.
+
+```{r}
+column_names_2 <- 
+  C_beta_wuni_df |> 
+  pull(1) %>%
+  c('Colony',.) |> 
+  str_replace('ADIG', 'D') |> 
+  str_replace('ATEN', 'T') |> 
+  str_replace('AMIL', 'M')
+
+C_beta_wuni_df <- 
+  C_beta_wuni_df |> 
+  `colnames<-`(column_names_2) |> 
+  mutate(Colony = str_replace(Colony,'ADIG', 'D'),
+         Colony = str_replace(Colony,'ATEN', 'T'),
+         Colony = str_replace(Colony,'AMIL', 'M'))
+```
+
+Convert to distance.
+
+```{r}
+C_beta_wuni_d <- 
+  C_beta_wuni_df |> 
+  column_to_rownames('Colony') |> 
+  as.dist()
+```
+
+Arrange heat tolerance metadata.
+
+```{r}
+C_symb_htol_df <- 
+  B_beta_htol_df |> 
+  rownames_to_column('Colony') |> 
+  arrange(Colony) |> 
+  column_to_rownames('Colony')
+```
+
+Make a function that filters dataframe based on species.
+
+```{r}
+C_beta_species_f <- 
+  function(df, species){
+    df2 <- 
+      df |> 
+      filter(str_detect(Colony, species))
+    
+    c <- 
+      df2 |> 
+      pull(Colony)
+      
+    df3 <- 
+      df2 |> 
+      select(all_of(c)) |> 
+      as.dist()
+    
+    return(df3)
+  }
+```
+
+Make distance data per species.
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_d <- 
+  C_beta_wuni_df |> 
+  C_beta_species_f('D')
+
+# A. millepora
+C_beta_wuni_am_d <- 
+  C_beta_wuni_df |> 
+  C_beta_species_f('M')
+
+# A. tenuis
+C_beta_wuni_at_d <- 
+  C_beta_wuni_df |> 
+  C_beta_species_f('T')
+```
+
+Prepare PCoA data.
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_pcoa_df <- 
+  C_beta_wuni_ad_d |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df |> 
+              arrange(Colony) |> 
+              filter(Species == 'A. digitifera'))
+
+# A. millepora
+C_beta_wuni_am_pcoa_df <- 
+  C_beta_wuni_am_d |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df |> 
+              arrange(Colony) |> 
+              filter(Species == 'A. millepora'))
+
+# A. tenuis
+C_beta_wuni_at_pcoa_df <- 
+  C_beta_wuni_at_d |> 
+  B_beta_pcoa_df_f() |> 
+  left_join(A_symb_htol_df |> 
+              arrange(Colony) |> 
+              filter(Species == 'A. tenuis'))
+```
+
+### Mortality-based
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_mor_p <- 
+  C_beta_wuni_ad_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+C_beta_wuni_am_mor_p <- 
+  C_beta_wuni_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+C_beta_wuni_at_mor_p <- 
+  C_beta_wuni_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+C_beta_wuni_mor_p <- 
+  plot_grid(nrow = 1,
+            C_beta_wuni_ad_mor_p,
+            C_beta_wuni_am_mor_p,
+            C_beta_wuni_at_mor_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = C_beta_wuni_mor_p,
+       filename = '../Results/Figures/C_beta_wuni_mor.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
+```
+
+### MIG-based
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_mig_p <- 
+  C_beta_wuni_ad_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+C_beta_wuni_am_mig_p <- 
+  C_beta_wuni_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+C_beta_wuni_at_mig_p <- 
+  C_beta_wuni_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+C_beta_wuni_mig_p <- 
+  plot_grid(nrow = 1,
+            C_beta_wuni_ad_mig_p,
+            C_beta_wuni_am_mig_p,
+            C_beta_wuni_at_mig_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = C_beta_wuni_mig_p,
+       filename = '../Results/Figures/C_beta_wuni_mig.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
+```
+
+### Mortality+MIG-based
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_mor.mig_p <- 
+  C_beta_wuni_ad_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+C_beta_wuni_am_mor.mig_p <- 
+  C_beta_wuni_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+C_beta_wuni_at_mor.mig_p <- 
+  C_beta_wuni_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(mor.mig) +
+  scale_color_manual(values = color_htol_int_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+C_beta_wuni_mor.mig_p <- 
+  plot_grid(nrow = 1,
+            C_beta_wuni_ad_mor.mig_p,
+            C_beta_wuni_am_mor.mig_p,
+            C_beta_wuni_at_mor.mig_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = C_beta_wuni_mor.mig_p,
+       filename = '../Results/Figures/C_beta_wuni_mor.mig.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
+```
+
+### Kmeans-based
+
+```{r}
+# A. digitifera
+C_beta_wuni_ad_kmeans_p <- 
+  C_beta_wuni_ad_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_ad_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. digitifera') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. millepora
+C_beta_wuni_am_kmeans_p <- 
+  C_beta_wuni_am_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_am_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. millepora') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# A. tenuis
+C_beta_wuni_at_kmeans_p <- 
+  C_beta_wuni_at_pcoa_df |> 
+  B_beta_its2_pcoa_f(kmeans) +
+  scale_color_manual(values = color_htol_c) +
+  labs(x = paste0('PCo1 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[1],2),
+                  '%)'),
+       y = paste0('PCo2 (', 
+                  round(B_beta_pcoa_eig_df_f(C_beta_wuni_at_d)[2],2),
+                  '%)'),
+       color = 'Heat tolerance',
+       subtitle = 'A. tenuis') +
+  theme(plot.subtitle = element_text(face = 'italic',
+                                     hjust = 0.5))
+
+# Merged
+C_beta_wuni_kmeans_p <- 
+  plot_grid(nrow = 1,
+            C_beta_wuni_ad_kmeans_p,
+            C_beta_wuni_am_kmeans_p,
+            C_beta_wuni_at_kmeans_p)
+```
+
+Export.
+
+```{r}
+ggsave(plot = C_beta_wuni_kmeans_p,
+       filename = '../Results/Figures/C_beta_wuni_kmeans.png',
+       dpi = 900,
+       width = 14000, 
+       height = 3500, 
+       units = "px")
+```
+
+## D: PERMANOVA
+
+### BC
+
+#### Global (all species)
+
+```{r}
+D_beta_bc_all_d <- 
+  B_beta_its2_df |> 
+  rownames_to_column("Colony") |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+  
+D_beta_bc_meta <- 
+  A_symb_htol_df |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+D_beta_bc_spec_pmanova <- 
+  adonis2(D_beta_bc_all_d ~ Species,
+          data = D_beta_bc_meta,
+          permuations = 9999)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_bc_spec_pmanova,
+          '../Results/Tables/D_beta_bc_spec_pmanova_global.csv')
+```
+
+Pairwise.
+
+```{r}
+D_beta_bc_pwis_spec_pmanova <- 
+    pairwise.adonis2(D_beta_bc_all_d ~ Species, 
+                     data = D_beta_bc_meta, 
+                     permutations = 9999)
+```
+
+Make a function that collapses the lists into 1 dataframe (for reporting).
+
+```{r}
+D_beta_bc_pwis_pmanova_clean_f <- 
+  function(pmanova_res){
+    a <- 
+      pmanova_res[-1] |> 
+      bind_rows(.id = 'groups') |> 
+      drop_na() %>%
+      .$`Pr(>F)` |> 
+      p.adjust(method = 'BH') 
+    
+    b <- 
+      unique(pmanova_res[-1] |> 
+               bind_rows(.id = 'groups'))$groups |> 
+      unique()
+      
+    d <- 
+       a %>% 
+        data.frame(b,.) |> 
+        rename('groups' = 1,
+               `P-adjusted` = 2) %>% 
+        left_join(pmanova_res[-1] |> 
+                    bind_rows(.id = 'groups'), 
+                  ., 
+                  by = 'groups') |> 
+        mutate(`P-adjusted` = case_when(is.na(`Pr(>F)`) ~ NA,
+                                        .default = `P-adjusted`)) |> 
+        add_column(c('','Residual', 'Total') |> 
+                     c(c('','Residual', 'Total')) |> 
+                     c(c('','Residual', 'Total'))) |> 
+        mutate(groups = case_when(`c(...)` == 'Residual' ~ 'Residual',
+                                  `c(...)` == 'Total' ~ 'Total',
+                                  .default = groups)) |> 
+        select(!last_col())
+    
+    return(d)
+  }
+```
+
+Get clean pairwise PERMANOVA results.
+
+```{r}
+D_beta_bc_pwis_spec_pmanova_df <- 
+  D_beta_bc_pwis_pmanova_clean_f(D_beta_bc_pwis_spec_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_bc_pwis_spec_pmanova_df,
+          '../Results/Tables/D_beta_bc_spec_pmanova_pwise.csv')
+```
+
+#### Per species
+
+*A. digitifera.*
+
+```{r}
+# BC distance matrix
+D_beta_bc_ad_d <- 
+  B_beta_its2_df |> 
+  rownames_to_column("Colony") |>  
+  filter(str_detect(Colony, 'D')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+
+# Metadata
+D_beta_bc_ad_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'D')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_bc_ad_mor_pmanova <- 
+  adonis2(D_beta_bc_ad_d ~ mor, 
+          data = D_beta_bc_ad_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_bc_ad_mig_pmanova <- 
+  adonis2(D_beta_bc_ad_d ~ mig, 
+          data = D_beta_bc_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_bc_ad_mor.mig_pmanova <- 
+  adonis2(D_beta_bc_ad_d ~ mor.mig, 
+          data = D_beta_bc_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_bc_ad_kmeans_pmanova <- 
+  adonis2(D_beta_bc_ad_d ~ kmeans, 
+          data = D_beta_bc_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_bc_ad_all_pmanova <- 
+  bind_rows(D_beta_bc_ad_mor_pmanova,
+            D_beta_bc_ad_mig_pmanova,
+            D_beta_bc_ad_mor.mig_pmanova,
+            D_beta_bc_ad_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_bc_ad_all_pmanova,
+          '../Results/Tables/D_beta_bc_ad_all_pmanova.csv')
+```
+
+*A. millepora.*
+
+```{r}
+# BC distance matrix
+D_beta_bc_am_d <- 
+  B_beta_its2_df |> 
+  rownames_to_column("Colony") |>  
+  filter(str_detect(Colony, 'M')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+
+# Metadata
+D_beta_bc_am_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'M')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_bc_am_mor_pmanova <- 
+  adonis2(D_beta_bc_am_d ~ mor, 
+          data = D_beta_bc_am_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_bc_am_mig_pmanova <- 
+  adonis2(D_beta_bc_am_d ~ mig, 
+          data = D_beta_bc_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_bc_am_mor.mig_pmanova <- 
+  adonis2(D_beta_bc_am_d ~ mor.mig, 
+          data = D_beta_bc_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_bc_am_kmeans_pmanova <- 
+  adonis2(D_beta_bc_am_d ~ kmeans, 
+          data = D_beta_bc_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_bc_am_all_pmanova <- 
+  bind_rows(D_beta_bc_am_mor_pmanova,
+            D_beta_bc_am_mig_pmanova,
+            D_beta_bc_am_mor.mig_pmanova,
+            D_beta_bc_am_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_bc_am_all_pmanova,
+          '../Results/Tables/D_beta_bc_am_all_pmanova.csv')
+```
+
+*A. tenuis.*
+
+```{r}
+# BC distance matrix
+D_beta_bc_at_d <- 
+  B_beta_its2_df |> 
+  rownames_to_column("Colony") |>  
+  filter(str_detect(Colony, 'T')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+
+# Metadata
+D_beta_bc_at_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'T')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_bc_at_mor_pmanova <- 
+  adonis2(D_beta_bc_at_d ~ mor, 
+          data = D_beta_bc_at_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_bc_at_mig_pmanova <- 
+  adonis2(D_beta_bc_at_d ~ mig, 
+          data = D_beta_bc_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_bc_at_mor.mig_pmanova <- 
+  adonis2(D_beta_bc_at_d ~ mor.mig, 
+          data = D_beta_bc_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_bc_at_kmeans_pmanova <- 
+  adonis2(D_beta_bc_at_d ~ kmeans, 
+          data = D_beta_bc_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_bc_at_all_pmanova <- 
+  bind_rows(D_beta_bc_at_mor_pmanova,
+            D_beta_bc_at_mig_pmanova,
+            D_beta_bc_at_mor.mig_pmanova,
+            D_beta_bc_at_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_bc_at_all_pmanova,
+          '../Results/Tables/D_beta_bc_at_all_pmanova.csv')
+```
+
+### wUni
+
+```{r}
+# wUni distance matrix
+D_beta_wuni_all_d <- 
+  B_beta_its2_df |> 
+  rownames_to_column("Colony") |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+
+# Metadata
+D_beta_bc_meta <- 
+  A_symb_htol_df |> 
+  select(!1) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+
+
+adonis2(D_beta_bc_all_d ~ mor + mig + mor.mig + kmeans, 
+          data = D_beta_bc_meta, 
+          permutations = 9999)
+```
+
+#### Global (all species)
+
+```{r}
+D_beta_wuni_all_d <- 
+  C_beta_wuni_df |> 
+  column_to_rownames("Colony") |> 
+  vegdist()
+  
+D_beta_wuni_meta <- 
+  A_symb_htol_df |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+D_beta_wuni_spec_pmanova <- 
+  adonis2(D_beta_wuni_all_d ~ Species,
+          data = D_beta_wuni_meta,
+          permuations = 9999)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_wuni_spec_pmanova,
+          '../Results/Tables/D_beta_wuni_spec_pmanova_global.csv')
+```
+
+Pairwise.
+
+```{r}
+D_beta_wuni_pwis_spec_pmanova <- 
+    pairwise.adonis2(D_beta_wuni_all_d ~ Species, 
+                     data = D_beta_wuni_meta, 
+                     permutations = 9999)
+```
+
+Get clean pairwise PERMANOVA results.
+
+```{r}
+D_beta_wuni_pwis_spec_pmanova_df <- 
+  D_beta_bc_pwis_pmanova_clean_f(D_beta_wuni_pwis_spec_pmanova)
+```
+
+```{r}
+write_csv(D_beta_wuni_pwis_spec_pmanova_df,
+          '../Results/Tables/D_beta_wuni_spec_pmanova_pwise.csv')
+```
+
+#### Per species
+
+*A. digitifera.*
+
+```{r}
+# Weighted Unifrac distance matrix
+D_beta_wuni_ad_d <- 
+  C_beta_wuni_ad_d
+
+# Metadata
+D_beta_wuni_ad_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'D')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_wuni_ad_mor_pmanova <- 
+  adonis2(D_beta_wuni_ad_d ~ mor, 
+          data = D_beta_wuni_ad_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_wuni_ad_mig_pmanova <- 
+  adonis2(D_beta_wuni_ad_d ~ mig, 
+          data = D_beta_wuni_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_wuni_ad_mor.mig_pmanova <- 
+  adonis2(D_beta_wuni_ad_d ~ mor.mig, 
+          data = D_beta_wuni_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_wuni_ad_kmeans_pmanova <- 
+  adonis2(D_beta_wuni_ad_d ~ kmeans, 
+          data = D_beta_wuni_ad_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_wuni_ad_all_pmanova <- 
+  bind_rows(D_beta_wuni_ad_mor_pmanova,
+            D_beta_wuni_ad_mig_pmanova,
+            D_beta_wuni_ad_mor.mig_pmanova,
+            D_beta_wuni_ad_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_wuni_ad_all_pmanova,
+          '../Results/Tables/D_beta_wuni_ad_all_pmanova.csv')
+```
+
+*A. millepora.*
+
+```{r}
+# Weighted Unifrac distance matrix
+D_beta_wuni_am_d <- 
+  C_beta_wuni_am_d
+
+# Metadata
+D_beta_wuni_am_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'M')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_wuni_am_mor_pmanova <- 
+  adonis2(D_beta_wuni_am_d ~ mor, 
+          data = D_beta_wuni_am_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_wuni_am_mig_pmanova <- 
+  adonis2(D_beta_wuni_am_d ~ mig, 
+          data = D_beta_wuni_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_wuni_am_mor.mig_pmanova <- 
+  adonis2(D_beta_wuni_am_d ~ mor.mig, 
+          data = D_beta_wuni_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_wuni_am_kmeans_pmanova <- 
+  adonis2(D_beta_wuni_am_d ~ kmeans, 
+          data = D_beta_wuni_am_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_wuni_am_all_pmanova <- 
+  bind_rows(D_beta_wuni_am_mor_pmanova,
+            D_beta_wuni_am_mig_pmanova,
+            D_beta_wuni_am_mor.mig_pmanova,
+            D_beta_wuni_am_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_wuni_am_all_pmanova,
+          '../Results/Tables/D_beta_wuni_am_all_pmanova.csv')
+```
+
+*A. tenuis.*
+
+```{r}
+# Weighted Unifrac distance matrix
+D_beta_wuni_at_d <- 
+  C_beta_wuni_at_d
+
+# Metadata
+D_beta_wuni_at_meta <- 
+  A_symb_htol_df |> 
+  filter(str_detect(Colony, 'T')) |> 
+  arrange(Colony) |> 
+  column_to_rownames("Colony")
+
+# PERMANOVA
+D_beta_wuni_at_mor_pmanova <- 
+  adonis2(D_beta_wuni_at_d ~ mor, 
+          data = D_beta_wuni_at_meta, 
+          permutations = 9999)|> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality-based')
+
+D_beta_wuni_at_mig_pmanova <- 
+  adonis2(D_beta_wuni_at_d ~ mig, 
+          data = D_beta_wuni_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'MIG-based')
+
+D_beta_wuni_at_mor.mig_pmanova <- 
+  adonis2(D_beta_wuni_at_d ~ mor.mig, 
+          data = D_beta_wuni_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Mortality+MIG-based')
+
+D_beta_wuni_at_kmeans_pmanova <- 
+  adonis2(D_beta_wuni_at_d ~ kmeans, 
+          data = D_beta_wuni_at_meta, 
+          permutations = 9999) |> 
+  rownames_to_column('Stats') |> 
+  mutate(Basis = 'Kmeans-based')
+
+# Merge PERMANOVA data
+D_beta_wuni_at_all_pmanova <- 
+  bind_rows(D_beta_wuni_at_mor_pmanova,
+            D_beta_wuni_at_mig_pmanova,
+            D_beta_wuni_at_mor.mig_pmanova,
+            D_beta_wuni_at_kmeans_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_wuni_at_all_pmanova,
+          '../Results/Tables/D_beta_wuni_at_all_pmanova.csv')
+```
+
+Only *A. tenuis* clustered based on heat tolerance classification. Do pairwise testing.
+
+```{r}
+# Do pairwise PERMANOVA
+D_beta_wuni_pwis_htol_mig_at_pmanova <- 
+    pairwise.adonis2(D_beta_wuni_at_d ~ mig, 
+                     data = D_beta_wuni_at_meta, 
+                     permutations = 9999)
+
+D_beta_wuni_pwis_htol_mor.mig_at_pmanova <- 
+    pairwise.adonis2(D_beta_wuni_at_d ~ mor.mig, 
+                     data = D_beta_wuni_at_meta, 
+                     permutations = 9999)
+
+# Clean pairwise PERMANOVA
+D_beta_wuni_pwis_htol_mig_at_pmanova_df <- 
+  D_beta_bc_pwis_pmanova_clean_f(D_beta_wuni_pwis_htol_mig_at_pmanova)
+
+D_beta_wuni_pwis_htol_mor.mig_at_pmanova_df <- 
+  D_beta_bc_pwis_pmanova_clean_f(D_beta_wuni_pwis_htol_mor.mig_at_pmanova)
+```
+
+Export.
+
+```{r}
+write_csv(D_beta_wuni_pwis_htol_mig_at_pmanova_df,
+          '../Results/Tables/D_beta_wuni_at_htol-mig_pmanova_pwise.csv')
+
+write_csv(D_beta_wuni_pwis_htol_mor.mig_at_pmanova_df,
+          '../Results/Tables/D_beta_wuni_at_htol-mor.mig_pmanova_pwise.csv')
+```
+
+## E: PERMDISP
+
+Only global, all species for both BC and wUni had differences in community composition. Confirm if this is not due to dispersion of data points using PERMDISP.
+
+### BC
+
+```{r}
+# Global
+E_beta_bc_spec_permdisp <- 
+  anova(betadisper(D_beta_bc_all_d, D_beta_bc_meta |> pull(Species)))
+
+# Pairwise
+E_beta_bc_spec_permdisp_pwise <- 
+  TukeyHSD(betadisper(D_beta_bc_all_d, D_beta_bc_meta |> pull(Species)))$group |> 
+  as.data.frame() |> 
+  rownames_to_column('Comparison')
+```
+
+Export.
+
+```{r}
+write_csv(E_beta_bc_spec_permdisp,
+          '../Results/Tables/E_beta_bc_spec_permdisp.csv')
+
+write_csv(E_beta_bc_spec_permdisp_pwise,
+          '../Results/Tables/E_beta_bc_spec_permdisp_pwise.csv')
+```
+
+### wUni
+
+```{r}
+# Global
+E_beta_wuni_spec_permdisp <- 
+  anova(betadisper(D_beta_wuni_all_d, D_beta_wuni_meta |> pull(Species)))
+
+# Pairwise
+E_beta_wuni_spec_permdisp_pwise <- 
+  TukeyHSD(betadisper(D_beta_wuni_all_d, D_beta_wuni_meta |> pull(Species)))$group |> 
+  as.data.frame() |> 
+  rownames_to_column('Comparison')
+```
+
+Export.
+
+```{r}
+write_csv(E_beta_wuni_spec_permdisp,
+          '../Results/Tables/E_beta_wuni_spec_permdisp.csv')
+
+write_csv(E_beta_wuni_spec_permdisp_pwise,
+          '../Results/Tables/E_beta_wuni_spec_permdisp_pwise.csv')
 ```
