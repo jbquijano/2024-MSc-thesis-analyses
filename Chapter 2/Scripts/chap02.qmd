@@ -21,7 +21,8 @@ pacman::p_load(tidyverse,
                ggord,
                ape,
                cowplot,
-               pairwiseAdonis)
+               pairwiseAdonis,
+               tidytext)
 ```
 
 # A: Import data
@@ -32,6 +33,7 @@ Make color palettes.
 color_species_c <- c("#294557","#558981","#C6BF88")
 color_htol_c <- c("#B2182B", "#2166AC")
 color_htol_int_c <- c("#B2182B","gray", "#2166AC")
+color_its2prof_c <- c("#8c8c8c","#cccccc","#ffc425","#f37735")
 ```
 
 Make a vector that contains colony IDs that had unresolved heat tolerance.
@@ -1719,4 +1721,232 @@ write_csv(E_beta_wuni_spec_permdisp,
 
 write_csv(E_beta_wuni_spec_permdisp_pwise,
           '../Results/Tables/E_beta_wuni_spec_permdisp_pwise.csv')
+```
+
+# F: Taxonomy barplots
+
+## ITS2 sequences
+
+Get total number of sequences and get top 10 based on number of reads.
+
+```{r}
+# Get total number of reads per ITS2 sequence
+F_bar_its2_sum <- 
+  A_symb_its2_df |> 
+  pivot_longer(cols = !c(1,2),
+               names_to = 'ITS2 sequence',
+               values_to = 'Read count') |> 
+  select(!Species) |> 
+  pivot_wider(names_from = Colony,
+              values_from = `Read count`) |>
+  rowwise() |> 
+  mutate('Total reads' = sum(c_across(where(is.numeric)))) |> 
+  arrange(desc(`Total reads`)) %>%
+  add_column(Group = c(1:10, replicate(length(.$`ITS2 sequence`)-10,"Others")))
+
+# Clean data
+F_bar_its2_sum_summ <- 
+  F_bar_its2_sum |> 
+  mutate(`ITS2 sequence` = case_when(Group == 'Others' ~ 'Others',
+                                     .default = `ITS2 sequence`)) |> 
+  select(!c("Total reads","Group" )) |> 
+  group_by(`ITS2 sequence`) |> 
+  summarise(across(everything(), sum)) |> 
+  ungroup() |> 
+  rowwise() |> 
+  mutate("Total reads" = sum(c_across(T14:D09))) |> 
+  select(!`Total reads`)
+
+# Arrenge legend from top to bottom
+F_bar_its2_top11_c <- 
+  F_bar_its2_sum_summ |> 
+  pull(`ITS2 sequence`) 
+  
+F_bar_its2_top11_manual_c <- 
+  c("C3u","C3","C3xu","C115","C21ab","C3xt","C3xv","22573_C","21841_C","C3ge", "Others")
+
+# Remove non-top 10 ITS2 sequence
+F_bar_its2_top10_df <-
+  F_bar_its2_sum_summ |> 
+  pivot_longer(cols = !1,
+               names_to = 'Colony',
+               values_to = 'Read count')
+
+# Add metadata
+F_bar_its2_top10_meta_df <- 
+  F_bar_its2_top10_df |> 
+  left_join(A_symb_htol_df)
+
+# Arrange legend
+F_bar_its2_top10_meta_df$`ITS2 sequence` <- 
+  factor(F_bar_its2_top10_meta_df$`ITS2 sequence`, 
+         levels = F_bar_its2_top11_manual_c)
+
+# Make a list of preferred colors
+F_bar_its2_color_c <- 
+  c("#052405","#315132","#486949","#618361","#93AF93"
+    ,"#B8D0B8","#CAF0CA","#E8F8E8","#80350E","#C04F15",
+    "darkgray")
+```
+
+Make plot for ITS2 sequences.
+
+```{r}
+F_bar_its2_top10_p <- 
+  F_bar_its2_top10_meta_df |> 
+  ungroup() |> 
+  mutate(Colony = reorder_within(Colony, 
+                                 desc(`Combined survival and MIG`),
+                                 Species)) |> 
+  ggplot(aes(fill = `ITS2 sequence`,
+             x = Colony,
+             y = `Read count`)) +
+  geom_bar(position = 'fill',
+           stat = 'identity',
+           width = 1) + 
+  facet_grid(cols = vars(Species),
+             space = 'free',
+             scale = 'free') +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_reordered() +
+  scale_fill_manual(values = F_bar_its2_color_c) +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white'
+                                          ,linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Make plot for heat tolerance labels.
+
+```{r}
+F_tile_htol_df <- 
+  A_symb_htol_df |> 
+  select(c(Species, Colony, `Survival+MIG-based ranking`, mor.mig)) |> 
+  mutate(y = 1)
+
+F_tile_htol_p <- 
+  F_tile_htol_df |> 
+  mutate(Colony = reorder_within(Colony, 
+                                 desc(`Survival+MIG-based ranking`),
+                                 Species)) |> 
+  ggplot(aes(x = Colony,
+             y = y,
+             fill = mor.mig)) + 
+  geom_tile() +
+  facet_grid(cols = vars(Species),
+             space = 'free',
+             scale = 'free') +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values = color_htol_int_c) +
+  theme(axis.title = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.text = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        panel.background = element_blank())
+```
+
+Make plot for ITS2 profile.
+
+```{r}
+F_bar_its2prof_df <- 
+  A_symb_prof_df |> 
+  pivot_longer(cols = !c(1,2),
+               values_to = "Count",
+               names_to = "ITS2 Profile") |> 
+  left_join(A_symb_htol_df)
+
+F_bar_its2prof_p <- 
+  F_bar_its2prof_df |> 
+  mutate(Colony = reorder_within(Colony, 
+                                 desc(`Survival+MIG-based ranking`),
+                                 Species)) |> 
+  ggplot(aes(x = Colony,
+             y = Count,
+             fill = `ITS2 Profile`)) + 
+  geom_bar(position = 'fill',
+           stat = 'identity',
+           width = 1) +
+  facet_grid(cols = vars(Species),
+             space = 'free',
+             scale = 'free') +
+  scale_fill_manual(values = color_its2prof_c) +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0,0)) +
+  theme(axis.title = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.text = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        panel.background = element_blank())
+```
+
+```{r}
+plot_grid(nrow = 3,
+          F_bar_its2_top10_p + theme(legend.position = 'none'),
+          F_tile_htol_p + theme(legend.position = 'none'),
+          F_bar_its2prof_p + theme(legend.position = 'none'),
+          axis = 'tblr',
+          align = 'hv',
+          rel_heights = c(1,0.5,0.5))
+```
+
+```{r}
+F_hmap_its2_top10_p <- 
+  F_bar_its2_top10_meta_df |> 
+  ungroup() |> 
+  mutate(Colony = reorder_within(Colony, 
+                                 desc(`Combined survival and MIG`),
+                                 Species)) |> 
+  mutate(`Read count` = log(`Read count` + 1)) |> 
+  ggplot(aes(x = Colony,
+             y = `ITS2 sequence`)) +
+  geom_tile(aes(fill = `Read count`),
+            color = 'white',
+            linewidth = 0.1) + 
+  facet_grid(cols = vars(Species),
+             space = 'free',
+             scale = 'free') +
+  scale_x_reordered() +
+  scale_fill_distiller(direction = 1,
+                       palette = 'Greens') +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        axis.line = element_line(),
+        panel.background = element_rect(fill = '#F5F5F5'),
+        panel.grid.major.y = element_line(colour = 'white'
+                                          ,linewidth = 0.75),
+        panel.grid.minor.y = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        panel.grid.major.x = element_line(colour = 'white',
+                                          linewidth = 0.75),
+        panel.grid.minor.x = element_line(colour = 'white',
+                                          linewidth = 0.25),
+        strip.text = element_text(face = 'italic'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+F_bar_its2_count_p <- 
+  F_bar_its2_top10_meta_df |> 
+  group_by(`ITS2 sequence`) |> 
+  summarise(`Read count` = sum(`Read count`)) |> 
+  ggplot(aes(y = `ITS2 sequence`,
+             x = `Read count`)) +
+  geom_col()
+```
+
+```{r}
+
 ```
